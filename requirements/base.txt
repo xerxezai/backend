@@ -1,0 +1,28 @@
+# Core Django packages
+Django==4.2.7
+djangorestframework==3.14.0
+django-cors-headers==4.3.1
+django-filter==23.3
+django-extensions==3.2.3
+
+# Database
+psycopg2-binary==2.9.7
+
+# API Documentation
+drf-yasg==1.21.7
+
+# Authentication & Security
+PyJWT==2.8.0
+
+# Caching
+django-redis==5.4.0
+redis==5.0.1
+
+# Image handling
+Pillow==10.0.1
+
+# Environment management
+python-decouple==3.8
+
+# Development tools
+ipython==8.16.1

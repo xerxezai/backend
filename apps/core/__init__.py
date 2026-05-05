@@ -1,0 +1,1 @@
+# Core application for SEOZ Backend
