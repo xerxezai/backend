@@ -1,5 +1,5 @@
 """
-Authentication serializers for SEOZ Backend
+Authentication serializers for XERXEZ Backend
 Handles user authentication with soft coding approach
 """
 

@@ -1,7 +1,7 @@
 {
-  "name": "seoz-backend",
+  "name": "xerxez-backend",
   "version": "1.0.0",
-  "description": "Django REST API backend for SEOZ frontend with PostgreSQL",
+  "description": "Django REST API backend for XERXEZ frontend with PostgreSQL",
   "scripts": {
     "setup": "python scripts/setup_backend.py",
     "dev": "python scripts/django_manager.py runserver",
@@ -24,9 +24,9 @@
     "django",
     "rest-api",
     "postgresql",
-    "seoz",
+    "xerxez",
     "backend"
   ],
-  "author": "SEOZ Team",
+  "author": "XERXEZ Team",
   "license": "MIT"
 }

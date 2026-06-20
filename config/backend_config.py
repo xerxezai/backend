@@ -25,10 +25,10 @@ class BackendConfig:
         self.config = {
             # Project metadata
             'project': {
-                'name': 'SEOZ Backend',
-                'description': 'Django REST API backend for SEOZ frontend',
+                'name': 'XERXEZ Backend',
+                'description': 'Django REST API backend for XERXEZ frontend',
                 'version': '1.0.0',
-                'author': 'SEOZ Team',
+                'author': 'XERXEZ Team',
                 'api_version': 'v1'
             },
             
@@ -71,8 +71,8 @@ class BackendConfig:
                 'version': 'v1',
                 'documentation': {
                     'enabled': True,
-                    'title': 'SEOZ API Documentation',
-                    'description': 'REST API for SEOZ SEO & Digital Marketing Platform'
+                    'title': 'XERXEZ API Documentation',
+                    'description': 'REST API for XERXEZ SEO & Digital Marketing Platform'
                 },
                 'cors': {
                     'allowed_origins': self._get_cors_origins(),
@@ -133,6 +133,35 @@ class BackendConfig:
                 'analytics': {
                     'enabled': True,
                     'path': 'apps.analytics'
+                },
+                # ---- ERP modules ----
+                'crm': {
+                    'enabled': True,
+                    'path': 'apps.crm'
+                },
+                'sales': {
+                    'enabled': True,
+                    'path': 'apps.sales'
+                },
+                'invoicing': {
+                    'enabled': True,
+                    'path': 'apps.invoicing'
+                },
+                'hr': {
+                    'enabled': True,
+                    'path': 'apps.hr'
+                },
+                'inventory': {
+                    'enabled': True,
+                    'path': 'apps.inventory'
+                },
+                'accounting': {
+                    'enabled': True,
+                    'path': 'apps.accounting'
+                },
+                'tickets': {
+                    'enabled': True,
+                    'path': 'apps.tickets'
                 }
             },
             
@@ -160,9 +189,7 @@ class BackendConfig:
                              else 'django.core.cache.backends.locmem.LocMemCache',
                     'location': os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/1'),
                     'timeout': 300,
-                    'options': {
-                        'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-                    }
+                    'options': {}
                 }
             },
             
@@ -222,10 +249,13 @@ class BackendConfig:
     
     def _get_cors_origins(self) -> List[str]:
         """Get CORS allowed origins based on environment"""
+        env_value = os.getenv('CORS_ALLOWED_ORIGINS')
+        if env_value:
+            return [o.strip() for o in env_value.split(',') if o.strip()]
         if self.environment == 'production':
             return [
-                'https://seoz-frontend.com',
-                'https://www.seoz-frontend.com',
+                'https://xerxez-frontend.com',
+                'https://www.xerxez-frontend.com',
             ]
         return [
             'http://localhost:5173',  # Vite dev server
@@ -236,20 +266,26 @@ class BackendConfig:
     
     def _get_allowed_hosts(self) -> List[str]:
         """Get allowed hosts based on environment"""
+        env_value = os.getenv('ALLOWED_HOSTS')
+        if env_value:
+            return [h.strip() for h in env_value.split(',') if h.strip()]
         if self.environment == 'production':
             return [
-                'api.seoz-frontend.com',
-                'backend.seoz-frontend.com',
-                '.seoz-frontend.com',
+                'api.xerxez-frontend.com',
+                'backend.xerxez-frontend.com',
+                '.xerxez-frontend.com',
             ]
         return ['localhost', 'localhost:8000', '127.0.0.1', '127.0.0.1:8000', '[::1]', 'xerxez-backend']
     
     def _get_trusted_origins(self) -> List[str]:
         """Get CSRF trusted origins"""
+        env_value = os.getenv('CSRF_TRUSTED_ORIGINS')
+        if env_value:
+            return [o.strip() for o in env_value.split(',') if o.strip()]
         if self.environment == 'production':
             return [
-                'https://seoz-frontend.com',
-                'https://www.seoz-frontend.com',
+                'https://xerxez-frontend.com',
+                'https://www.xerxez-frontend.com',
             ]
         return [
             'http://localhost:5173',

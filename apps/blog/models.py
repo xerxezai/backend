@@ -1,5 +1,5 @@
 """
-Blog models for SEOZ Backend
+Blog models for XERXEZ Backend
 Handles blog posts, categories, and comments with SEO optimization
 """
 

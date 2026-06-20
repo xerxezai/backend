@@ -1,5 +1,5 @@
 """
-Django settings for SEOZ Backend
+Django settings for XERXEZ Backend
 Uses soft coding configuration for maximum flexibility
 """
 
@@ -61,7 +61,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'seoz_backend.urls'
+ROOT_URLCONF = 'xerxez_backend.urls'
 
 TEMPLATES = [
     {
@@ -79,7 +79,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'seoz_backend.wsgi.application'
+WSGI_APPLICATION = 'xerxez_backend.wsgi.application'
 
 # Database configuration using soft coding
 DATABASES = {
@@ -235,7 +235,7 @@ if not DEBUG:
     SECURE_HSTS_PRELOAD = True
     SECURE_HSTS_SECONDS = 3600
     
-    if backend_config.get('production.ssl_redirect'):
+    if backend_config.get('production.ssl_redirect') and os.getenv('SECURE_SSL_REDIRECT', 'True').lower() in ('true', '1', 'yes'):
         SECURE_SSL_REDIRECT = True
         SECURE_PROXY_SSL_HEADER = backend_config.get('production.secure_proxy_ssl_header')
 

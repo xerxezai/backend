@@ -1,5 +1,5 @@
 """
-Authentication views for SEOZ Backend
+Authentication views for XERXEZ Backend
 Provides secure authentication endpoints
 """
 

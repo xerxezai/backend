@@ -1,1 +1,1 @@
-# SEOZ Backend Apps
+# XERXEZ Backend Apps

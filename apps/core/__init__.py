@@ -1,1 +1,1 @@
-# Core application for SEOZ Backend
+# Core application for XERXEZ Backend

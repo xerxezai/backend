@@ -1,5 +1,5 @@
 """
-URL configuration for SEOZ Backend
+URL configuration for XERXEZ Backend
 Uses soft coding approach for flexible API routing
 """
 
@@ -24,7 +24,7 @@ schema_view = get_schema_view(
         title=backend_config.get('api.documentation.title'),
         default_version=backend_config.get('api.version'),
         description=backend_config.get('api.documentation.description'),
-        contact=openapi.Contact(email="admin@seoz.com"),
+        contact=openapi.Contact(email="admin@xerxez.com"),
         license=openapi.License(name="MIT License"),
     ),
     public=True,
@@ -41,6 +41,14 @@ api_patterns = [
     path('contact/', include('apps.contact.urls')),
     path('analytics/', include('apps.analytics.urls')),
     path('core/', include('apps.core.urls')),
+    # ---- ERP modules ----
+    path('crm/', include('apps.crm.urls')),
+    path('sales/', include('apps.sales.urls')),
+    path('invoicing/', include('apps.invoicing.urls')),
+    path('hr/', include('apps.hr.urls')),
+    path('inventory/', include('apps.inventory.urls')),
+    path('accounting/', include('apps.accounting.urls')),
+    path('tickets/', include('apps.tickets.urls')),
 ]
 
 urlpatterns = [

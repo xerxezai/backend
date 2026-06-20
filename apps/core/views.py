@@ -1,5 +1,5 @@
 """
-Core views for SEOZ Backend
+Core views for XERXEZ Backend
 Provides base functionality and health checks
 """
 
@@ -54,7 +54,7 @@ def api_root(request):
     API root endpoint providing available endpoints
     """
     return Response({
-        'message': 'Welcome to SEOZ API',
+        'message': 'Welcome to XERXEZ API',
         'version': backend_config.get('api.version'),
         'documentation': {
             'swagger': request.build_absolute_uri('/docs/'),

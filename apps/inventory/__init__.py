@@ -1,0 +1,1 @@
+# XERXEZ ERP - Inventory module

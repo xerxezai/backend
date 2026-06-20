@@ -1,5 +1,5 @@
 """
-Core models for SEOZ Backend
+Core models for XERXEZ Backend
 Base models with common functionality using soft coding principles
 """
 

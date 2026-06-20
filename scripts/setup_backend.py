@@ -1,5 +1,5 @@
 """
-SEOZ Backend Setup Script
+XERXEZ Backend Setup Script
 Automated setup for Django backend with soft coding
 """
 
@@ -178,7 +178,7 @@ class BackendSetup:
         self.print_step("COMPLETE", "Backend Setup Finished!")
         
         print("""
-🎉 SEOZ Backend is ready for development!
+🎉 XERXEZ Backend is ready for development!
 
 📋 Next Steps:
    1. Activate virtual environment:
@@ -215,7 +215,7 @@ class BackendSetup:
     def setup(self):
         """Run complete setup process"""
         print("""
-🚀 SEOZ Backend Setup
+🚀 XERXEZ Backend Setup
 Setting up Django backend with soft coding architecture
         """)
         
