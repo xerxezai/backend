@@ -231,12 +231,7 @@ class BackendConfig:
                     },
                 },
                 'handlers': {
-                    'file': {
-                        'level': 'INFO',
-                        'class': 'logging.FileHandler',
-                        'filename': str(self.base_dir / 'logs' / 'django.log'),
-                        'formatter': 'verbose',
-                    },
+                    
                     'console': {
                         'level': 'DEBUG',
                         'class': 'logging.StreamHandler',
@@ -244,7 +239,7 @@ class BackendConfig:
                     },
                 },
                 'root': {
-                    'handlers': ['console', 'file'],
+                    'handlers': ['console'],
                     'level': 'WARNING',
                 },
             }
