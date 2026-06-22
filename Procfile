@@ -1,0 +1,1 @@
+web: gunicorn xerxez_backend.wsgi
