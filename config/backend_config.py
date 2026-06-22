@@ -188,9 +188,9 @@ class BackendConfig:
                     }
                 },
                 'cache': {
-                    'backend': 'django.core.cache.backends.redis.RedisCache' if self.environment == 'production' 
-                             else 'django.core.cache.backends.locmem.LocMemCache',
-                    'location': os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/1'),
+                    'backend': 'django.core.cache.backends.locmem.LocMemCache',
+                            
+                    'location': 'unique-xerxez-cache',
                     'timeout': 300,
                     'options': {}
                 }
@@ -265,7 +265,6 @@ class BackendConfig:
     def _get_allowed_hosts(self) -> List[str]:
         return ['*']
        
-    
     def _get_trusted_origins(self) -> List[str]:
         """Get CSRF trusted origins"""
         env_value = os.getenv('CSRF_TRUSTED_ORIGINS')
