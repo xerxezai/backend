@@ -272,6 +272,7 @@ class BackendConfig:
                 'api.xerxez-frontend.com',
                 'backend.xerxez-frontend.com',
                 '.xerxez-frontend.com',
+                '.up.railway.app',
             ]
         return ['localhost', 'localhost:8000', '127.0.0.1', '127.0.0.1:8000', '[::1]', 'xerxez-backend']
     
