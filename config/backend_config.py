@@ -263,18 +263,8 @@ class BackendConfig:
         ]
     
     def _get_allowed_hosts(self) -> List[str]:
-        """Get allowed hosts based on environment"""
-        env_value = os.getenv('ALLOWED_HOSTS')
-        if env_value:
-            return [h.strip() for h in env_value.split(',') if h.strip()]
-        if self.environment == 'production':
-            return [
-                'api.xerxez-frontend.com',
-                'backend.xerxez-frontend.com',
-                '.xerxez-frontend.com',
-                '.up.railway.app',
-            ]
-        return ['localhost', 'localhost:8000', '127.0.0.1', '127.0.0.1:8000', '[::1]', 'xerxez-backend']
+        return ['*']
+       
     
     def _get_trusted_origins(self) -> List[str]:
         """Get CSRF trusted origins"""
