@@ -1,1 +1,1 @@
-web: gunicorn xerxez_backend.wsgi
+web: python manage.py collectstatic --noinput && gunicorn xerxez_backend.wsgi
