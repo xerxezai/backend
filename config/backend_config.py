@@ -8,6 +8,10 @@ import os
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
+# Load .env file
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent.parent / '.env')
+
 class BackendConfig:
     """
     Central configuration class for the Django backend
@@ -45,26 +49,25 @@ class BackendConfig:
                 'requirements': str(self.base_dir / 'requirements'),
             },
             
-            # Database configuration
-            'database': {
-                'default': {
-                    'engine': 'django.db.backends.postgresql',
-                    'name': os.getenv('DB_NAME', 'xerxez_db'),
-                    'user': os.getenv('DB_USER', 'xerxez_user'),
-                    'password': os.getenv('DB_PASSWORD', 'xerxez_pass'),
-                    'host': os.getenv('DB_HOST', 'postgres'),
-                    'port': os.getenv('DB_PORT', '5432'),
-                    'options': {
-                        'sslmode': os.getenv('DB_SSLMODE', 'prefer'),
-                    }
-                },
-                'backup': {
-                    'enabled': True,
-                    'schedule': '0 2 * * *',  # Daily at 2 AM
-                    'retention_days': 30
-                }
-            },
-            
+  # Database configuration
+'database': {
+    'default': {
+        'engine': 'django.db.backends.postgresql',
+        'name': os.getenv('DB_NAME', 'xerxez'),
+        'user': os.getenv('DB_USER', 'xerxez_user'),
+        'password': os.getenv('DB_PASSWORD', 'xerxez_pass'),
+        'host': os.getenv('DB_HOST', 'postgres'),
+        'port': os.getenv('DB_PORT', '5432'),
+        'options': {
+            'sslmode': os.getenv('DB_SSLMODE', 'prefer'),
+        }
+    },
+    'backup': {
+        'enabled': True,
+        'schedule': '0 2 * * *',  # Daily at 2 AM
+        'retention_days': 30
+    }
+},         
             # API configuration
             'api': {
                 'prefix': 'api',
@@ -197,7 +200,7 @@ class BackendConfig:
             'development': {
                 'debug': True,
                 'auto_reload': True,
-                'show_toolbar': True,
+                'show_toolbar': False,
                 'log_level': 'DEBUG',
                 'profiling': False
             },

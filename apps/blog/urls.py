@@ -2,17 +2,17 @@
 URL configuration for Blog app
 """
 
-from django.urls import path
+from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from .views import CategoryViewSet, TagViewSet, BlogPostViewSet, CommentViewSet
 
 app_name = 'blog'
 router = DefaultRouter()
-
-# Add viewsets to router when created
-# router.register('posts', BlogPostViewSet)
-# router.register('categories', CategoryViewSet)
-# router.register('tags', TagViewSet)
+router.register(r'categories', CategoryViewSet, basename='category')
+router.register(r'tags', TagViewSet, basename='tag')
+router.register(r'posts', BlogPostViewSet, basename='blogpost')
+router.register(r'comments', CommentViewSet, basename='comment')
 
 urlpatterns = [
-    # Add URL patterns here
-] + router.urls
+    path('', include(router.urls)),
+]

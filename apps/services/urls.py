@@ -1,16 +1,13 @@
 """
 URL configuration for Services app
 """
-
 from django.urls import path
 from rest_framework.routers import DefaultRouter
+from .views import ServiceViewSet
 
 app_name = 'services'
 router = DefaultRouter()
-
-# Add viewsets to router when created
-# router.register('services', ServiceViewSet)
+router.register('', ServiceViewSet, basename='service')
 
 urlpatterns = [
-    # Add URL patterns here
 ] + router.urls
