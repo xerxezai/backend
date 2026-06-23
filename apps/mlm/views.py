@@ -13,6 +13,7 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from .models import MLMProfile, CommissionStructure, Transaction, Commission, Earning
+from .utils import calculate_and_create_commissions
 from .serializers import (
     MLMProfileSerializer,
     CommissionStructureSerializer,
@@ -21,52 +22,6 @@ from .serializers import (
     EarningSerializer,
     ReferralTreeNodeSerializer,
 )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _calculate_and_create_commissions(tx: Transaction):
-    """
-    Walk up the referral tree from the transaction's user and create Commission
-    records for every active upline member that has a matching CommissionStructure.
-    Also refreshes each upline member's Earning aggregate.
-    """
-    try:
-        profile = tx.user.mlm_profile
-    except MLMProfile.DoesNotExist:
-        return
-
-    current = profile.referrer
-    level = 1
-
-    while current is not None and level <= 10:
-        try:
-            structure = CommissionStructure.objects.get(level=level, is_active=True)
-        except CommissionStructure.DoesNotExist:
-            current = current.referrer
-            level += 1
-            continue
-
-        commission_amount = tx.amount * (structure.commission_rate / Decimal('100'))
-
-        Commission.objects.get_or_create(
-            earner=current.user,
-            transaction=tx,
-            level=level,
-            defaults={
-                'source_user': tx.user,
-                'commission_rate': structure.commission_rate,
-                'amount': commission_amount,
-            },
-        )
-
-        earning, _ = Earning.objects.get_or_create(user=current.user)
-        earning.recalculate()
-
-        current = current.referrer
-        level += 1
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +111,7 @@ class TransactionListCreateView(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         tx = serializer.save(user=self.request.user)
         if tx.status == 'completed':
-            _calculate_and_create_commissions(tx)
+            calculate_and_create_commissions(tx)
 
 
 class TransactionDetailView(generics.RetrieveUpdateAPIView):
@@ -177,7 +132,7 @@ class TransactionDetailView(generics.RetrieveUpdateAPIView):
         old_status = self.get_object().status
         tx = serializer.save()
         if old_status != 'completed' and tx.status == 'completed':
-            _calculate_and_create_commissions(tx)
+            calculate_and_create_commissions(tx)
 
 
 # ---------------------------------------------------------------------------

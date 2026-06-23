@@ -3,8 +3,8 @@ MLM Admin configuration for XERXEZ Backend
 """
 
 from django.contrib import admin
-from django.utils.html import format_html
 from .models import MLMProfile, CommissionStructure, Transaction, Commission, Earning
+from .utils import calculate_and_create_commissions
 
 
 @admin.register(MLMProfile)
@@ -44,6 +44,17 @@ class TransactionAdmin(admin.ModelAdmin):
     readonly_fields = ['reference', 'created_at', 'updated_at']
     ordering = ['-created_at']
     date_hierarchy = 'created_at'
+
+    def save_model(self, request, obj, form, change):
+        old_status = None
+        if change:
+            try:
+                old_status = Transaction.objects.get(pk=obj.pk).status
+            except Transaction.DoesNotExist:
+                pass
+        super().save_model(request, obj, form, change)
+        if obj.status == 'completed' and old_status != 'completed':
+            calculate_and_create_commissions(obj)
 
 
 @admin.register(Commission)
