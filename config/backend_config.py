@@ -6,7 +6,7 @@ Manages all settings, paths, and environment configurations
 
 import os
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 # Load .env file
 from dotenv import load_dotenv
@@ -165,6 +165,11 @@ class BackendConfig:
                 'tickets': {
                     'enabled': True,
                     'path': 'apps.tickets'
+                },
+                # ---- MLM module ----
+                'mlm': {
+                    'enabled': True,
+                    'path': 'apps.mlm'
                 }
             },
             
@@ -325,7 +330,7 @@ class BackendConfig:
     def get_enabled_apps(self) -> List[str]:
         """Get list of enabled Django apps"""
         apps = []
-        for app_name, app_config in self.get('apps', {}).items():
+        for _, app_config in self.get('apps', {}).items():
             if app_config.get('enabled', False):
                 apps.append(app_config['path'])
         return apps
