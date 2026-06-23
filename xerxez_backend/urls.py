@@ -54,6 +54,10 @@ api_patterns = [
     path('accounting/', include('apps.accounting.urls')),
     path('tickets/', include('apps.tickets.urls')),
 
+    path('purchases/', include('apps.purchases.urls')),
+    path('logistics/', include('apps.logistics.urls')),
+    path('reports/', include('apps.reports.urls')),
+
     # MLM module
     path('mlm/', include('apps.mlm.urls')),
 ]

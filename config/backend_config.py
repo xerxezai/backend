@@ -166,6 +166,18 @@ class BackendConfig:
                     'enabled': True,
                     'path': 'apps.tickets'
                 },
+                'purchases': {
+                    'enabled': True,
+                    'path': 'apps.purchases'
+                },
+                'logistics': {
+                    'enabled': True,
+                    'path': 'apps.logistics'
+                },
+                'reports': {
+                    'enabled': True,
+                    'path': 'apps.reports'
+                },
                 # ---- MLM module ----
                 'mlm': {
                     'enabled': True,
