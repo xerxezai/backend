@@ -4,7 +4,7 @@ Handles blog posts, categories, and comments with SEO optimization
 """
 
 from django.db import models
-from django.contrib.auth.models import User
+from django.conf import settings
 from django.utils.text import slugify
 from apps.core.models import BaseModel, SEOMetadata, PublishableModel, SoftDeleteModel
 
@@ -59,7 +59,7 @@ class BlogPost(PublishableModel, SEOMetadata, SoftDeleteModel):
     content = models.TextField()
     excerpt = models.TextField(max_length=300, blank=True)
     featured_image = models.ImageField(upload_to='blog/featured/', blank=True, null=True)
-    author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='blog_posts')
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='blog_posts')
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True)
     tags = models.ManyToManyField(Tag, blank=True)
     

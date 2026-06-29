@@ -1,5 +1,5 @@
 """Support ticket models."""
-from django.contrib.auth.models import User
+from django.conf import settings
 from django.db import models
 
 from apps.crm.models import Customer
@@ -36,7 +36,7 @@ class Ticket(models.Model):
     description = models.TextField(blank=True)
     customer = models.ForeignKey(Customer, null=True, blank=True, on_delete=models.SET_NULL, related_name='tickets')
     category = models.ForeignKey(TicketCategory, null=True, blank=True, on_delete=models.SET_NULL, related_name='tickets')
-    assignee = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='assigned_tickets')
+    assignee = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='assigned_tickets')
     requester_email = models.EmailField(blank=True)
     status = models.CharField(max_length=20, choices=STATUS, default='open')
     priority = models.CharField(max_length=10, choices=PRIORITY, default='medium')
@@ -52,7 +52,7 @@ class Ticket(models.Model):
 
 class TicketComment(models.Model):
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name='comments')
-    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     body = models.TextField()
     is_internal = models.BooleanField(default=False, help_text='Hidden from the customer')
     created_at = models.DateTimeField(auto_now_add=True)

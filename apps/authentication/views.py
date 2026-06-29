@@ -2,8 +2,10 @@
 Authentication views for XERXEZ Backend — JWT-based
 """
 
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from django.utils import timezone
+
+User = get_user_model()
 from rest_framework import generics, permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response

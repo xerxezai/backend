@@ -5,7 +5,7 @@ Base models with common functionality using soft coding principles
 
 from django.db import models
 from django.utils import timezone
-from django.contrib.auth.models import User
+from django.conf import settings
 import uuid
 
 
@@ -57,7 +57,7 @@ class SoftDeleteModel(models.Model):
     """
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(blank=True, null=True)
-    deleted_by = models.ForeignKey(User, on_delete=models.SET_NULL, 
+    deleted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, 
                                  null=True, blank=True, related_name='+')
     
     class Meta:

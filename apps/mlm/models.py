@@ -7,7 +7,7 @@ Connected to Django's built-in User model
 import uuid
 from decimal import Decimal
 from django.db import models
-from django.contrib.auth.models import User
+from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 
 
@@ -17,7 +17,7 @@ class MLMProfile(models.Model):
     Each profile knows its referrer (parent) and can look up its downline (children).
     """
     user = models.OneToOneField(
-        User,
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='mlm_profile',
     )
@@ -119,7 +119,7 @@ class Transaction(models.Model):
     ]
 
     user = models.ForeignKey(
-        User,
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='mlm_transactions',
     )
@@ -161,13 +161,13 @@ class Commission(models.Model):
     ]
 
     earner = models.ForeignKey(
-        User,
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='commissions_earned',
         help_text='Upline user receiving this commission',
     )
     source_user = models.ForeignKey(
-        User,
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='commissions_generated',
         help_text='Downline user whose transaction triggered this commission',
@@ -201,7 +201,7 @@ class Earning(models.Model):
     Aggregated earnings summary per user — updated whenever commissions change.
     """
     user = models.OneToOneField(
-        User,
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='mlm_earnings',
     )

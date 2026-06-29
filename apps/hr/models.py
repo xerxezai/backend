@@ -1,12 +1,12 @@
 """HR models: departments, employees, attendance, leave."""
-from django.contrib.auth.models import User
+from django.conf import settings
 from django.db import models
 
 
 class Department(models.Model):
     code = models.CharField(max_length=20, unique=True)
     name = models.CharField(max_length=120, unique=True)
-    manager = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='managed_departments')
+    manager = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='managed_departments')
     parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='children')
 
     class Meta:
@@ -24,7 +24,7 @@ class Employee(models.Model):
         ('terminated', 'Terminated'),
     ]
     code = models.CharField(max_length=20, unique=True, help_text='e.g. EMP-0001')
-    user = models.OneToOneField(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='employee_profile')
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='employee_profile')
     full_name = models.CharField(max_length=200)
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=40, blank=True)
@@ -79,7 +79,7 @@ class LeaveRequest(models.Model):
     days = models.DecimalField(max_digits=5, decimal_places=1, default=0)
     reason = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=STATUS, default='pending')
-    decided_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='leave_decisions')
+    decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='leave_decisions')
     decided_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
