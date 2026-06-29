@@ -1,5 +1,5 @@
 from rest_framework import viewsets, filters
-from rest_framework.authentication import TokenAuthentication
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
@@ -10,7 +10,7 @@ from .serializers import QuotationSerializer, QuotationItemSerializer, SalesOrde
 class QuotationViewSet(viewsets.ModelViewSet):
     queryset = Quotation.objects.select_related('customer').prefetch_related('items').all()
     serializer_class = QuotationSerializer
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, DjangoFilterBackend, filters.OrderingFilter]
     search_fields = ['number', 'customer__name']
@@ -21,7 +21,7 @@ class QuotationViewSet(viewsets.ModelViewSet):
 class QuotationItemViewSet(viewsets.ModelViewSet):
     queryset = QuotationItem.objects.select_related('quotation').all()
     serializer_class = QuotationItemSerializer
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['quotation']
@@ -30,7 +30,7 @@ class QuotationItemViewSet(viewsets.ModelViewSet):
 class SalesOrderViewSet(viewsets.ModelViewSet):
     queryset = SalesOrder.objects.select_related('customer', 'quotation').all()
     serializer_class = SalesOrderSerializer
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, DjangoFilterBackend, filters.OrderingFilter]
     search_fields = ['number', 'customer__name']

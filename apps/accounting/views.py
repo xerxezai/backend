@@ -1,5 +1,5 @@
 from rest_framework import viewsets, filters
-from rest_framework.authentication import TokenAuthentication
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
@@ -10,7 +10,7 @@ from .serializers import AccountSerializer, JournalEntrySerializer, JournalLineS
 class AccountViewSet(viewsets.ModelViewSet):
     queryset = Account.objects.all()
     serializer_class = AccountSerializer
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, DjangoFilterBackend]
     search_fields = ['name', 'code']
@@ -20,7 +20,7 @@ class AccountViewSet(viewsets.ModelViewSet):
 class JournalEntryViewSet(viewsets.ModelViewSet):
     queryset = JournalEntry.objects.prefetch_related('lines__account').all()
     serializer_class = JournalEntrySerializer
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, DjangoFilterBackend, filters.OrderingFilter]
     search_fields = ['number', 'description', 'reference']
@@ -31,7 +31,7 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
 class JournalLineViewSet(viewsets.ModelViewSet):
     queryset = JournalLine.objects.select_related('entry', 'account').all()
     serializer_class = JournalLineSerializer
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['entry', 'account']
