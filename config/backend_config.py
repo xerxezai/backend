@@ -269,13 +269,13 @@ class BackendConfig:
             return [o.strip() for o in env_value.split(',') if o.strip()]
         if self.environment == 'production':
             return [
-                'https://xerxez-frontend.com',
-                'https://www.xerxez-frontend.com',
+                'https://xerxez.com',
+                'https://www.xerxez.com',
             ]
         return [
-            'http://localhost:5173',  # Vite dev server
+            'http://localhost:5173',
             'http://127.0.0.1:5173',
-            'http://localhost:3000',  # Alternative frontend
+            'http://localhost:3000',
             'http://127.0.0.1:3000',
         ]
     
@@ -289,8 +289,8 @@ class BackendConfig:
             return [o.strip() for o in env_value.split(',') if o.strip()]
         if self.environment == 'production':
             return [
-                'https://xerxez-frontend.com',
-                'https://www.xerxez-frontend.com',
+                'https://xerxez.com',
+                'https://www.xerxez.com',
             ]
         return [
             'http://localhost:5173',
