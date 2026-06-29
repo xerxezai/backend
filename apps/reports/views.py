@@ -3,7 +3,7 @@ from django.db.models import Sum, Count, Q
 from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.authentication import TokenAuthentication
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 
 from apps.crm.models import Customer, Lead
@@ -16,7 +16,7 @@ from apps.mlm.models import Commission, Earning
 
 
 class ERPDashboardView(APIView):
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -67,7 +67,7 @@ class ERPDashboardView(APIView):
 
 
 class SalesReportView(APIView):
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -88,7 +88,7 @@ class SalesReportView(APIView):
 
 
 class HRReportView(APIView):
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -103,7 +103,7 @@ class HRReportView(APIView):
 
 
 class InventoryReportView(APIView):
-    authentication_classes = [TokenAuthentication]
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
