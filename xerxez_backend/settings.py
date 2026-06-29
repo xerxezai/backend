@@ -17,6 +17,12 @@ sys.path.insert(0, os.path.join(BASE_DIR, 'config'))
 # Import our soft-coded configuration
 from backend_config import backend_config
 
+# Startup env-var check — logs missing vars to Railway/Heroku stderr
+REQUIRED_ENV_VARS = ['DJANGO_SECRET_KEY', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'DB_HOST']
+_missing = [v for v in REQUIRED_ENV_VARS if not os.environ.get(v)]
+if _missing:
+    print(f"MISSING ENV VARS: {_missing}", file=sys.stderr)
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
 
