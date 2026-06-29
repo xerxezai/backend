@@ -1,1 +1,1 @@
-web: python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn xerxez_backend.wsgi
+web: python manage.py migrate --noinput && python manage.py shell -c "exec(open('scripts/create_railway_users.py').read())" && python manage.py collectstatic --noinput && gunicorn xerxez_backend.wsgi --bind 0.0.0.0:$PORT
