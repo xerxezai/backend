@@ -1,13 +1,14 @@
 """
-Authentication views for XERXEZ Backend
-Provides secure authentication endpoints
+Authentication views for XERXEZ Backend — JWT-based
 """
 
 from django.contrib.auth.models import User
+from django.utils import timezone
 from rest_framework import generics, permissions, status
-from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
 from drf_yasg.utils import swagger_auto_schema
 
 from .serializers import (
@@ -18,34 +19,52 @@ from .serializers import (
 )
 
 
+def _user_payload(user):
+    """Build the standard login/me response dict."""
+    try:
+        role = user.profile.role
+    except Exception:
+        role = 'admin'
+    return {
+        'id': user.id,
+        'username': user.username,
+        'name': user.first_name or user.username,
+        'role': role,
+        'email': user.email,
+    }
+
+
 class LoginView(generics.GenericAPIView):
-    """
-    User login endpoint
-    """
+    """POST /api/v1/auth/login/ — returns JWT access + refresh tokens."""
     serializer_class = LoginSerializer
     permission_classes = [permissions.AllowAny]
+    throttle_scope = 'anon'
 
     @swagger_auto_schema(request_body=LoginSerializer)
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user = serializer.validated_data["user"]
-        token, created = Token.objects.get_or_create(user=user)
+        user = serializer.validated_data['user']
 
-        return Response(
-            {
-                "token": token.key,
-                "user": UserSerializer(user).data,
-            },
-            status=status.HTTP_200_OK,
-        )
+        # Update last_login_at on the profile
+        try:
+            user.profile.last_login_at = timezone.now()
+            user.profile.save(update_fields=['last_login_at'])
+        except Exception:
+            pass
+
+        refresh = RefreshToken.for_user(user)
+
+        return Response({
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+            **_user_payload(user),
+        }, status=status.HTTP_200_OK)
 
 
 class RegisterView(generics.CreateAPIView):
-    """
-    User registration endpoint
-    """
+    """POST /api/v1/auth/register/"""
     queryset = User.objects.all()
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
@@ -54,46 +73,40 @@ class RegisterView(generics.CreateAPIView):
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         user = serializer.save()
-        token, created = Token.objects.get_or_create(user=user)
-
-        return Response(
-            {
-                "message": "User registered successfully",
-                "token": token.key,
-                "user": UserSerializer(user).data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'message': 'User registered successfully',
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+            **_user_payload(user),
+        }, status=status.HTTP_201_CREATED)
 
 
-@api_view(["POST"])
+@api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
-@swagger_auto_schema(request_body=None)
 def logout_view(request):
-    """
-    User logout endpoint
-    """
+    """POST /api/v1/auth/logout/ — blacklists the refresh token."""
     try:
-        request.user.auth_token.delete()
+        refresh_token = request.data.get('refresh')
+        if refresh_token:
+            RefreshToken(refresh_token).blacklist()
+    except TokenError:
+        pass
+    return Response({'message': 'Successfully logged out'}, status=status.HTTP_200_OK)
 
-        return Response(
-            {"message": "Successfully logged out"},
-            status=status.HTTP_200_OK,
-        )
 
-    except Token.DoesNotExist:
-        return Response(
-            {"message": "User was not logged in"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+class MeView(generics.RetrieveAPIView):
+    """GET /api/v1/auth/me/ — returns current user info."""
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
 
 
 class ProfileView(generics.RetrieveUpdateAPIView):
-    """
-    User profile endpoint
-    """
+    """GET/PATCH /api/v1/auth/profile/"""
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -102,29 +115,19 @@ class ProfileView(generics.RetrieveUpdateAPIView):
 
 
 class PasswordChangeView(generics.GenericAPIView):
-    """
-    Password change endpoint
-    """
+    """POST /api/v1/auth/change-password/"""
     serializer_class = PasswordChangeSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     @swagger_auto_schema(request_body=PasswordChangeSerializer)
     def post(self, request):
-        serializer = self.get_serializer(
-            data=request.data,
-            context={"request": request},
-        )
-
+        serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
-
-        Token.objects.filter(user=request.user).delete()
-        new_token = Token.objects.create(user=request.user)
-
-        return Response(
-            {
-                "message": "Password changed successfully",
-                "token": new_token.key,
-            },
-            status=status.HTTP_200_OK,
-        )
+        # Issue new tokens after password change
+        refresh = RefreshToken.for_user(request.user)
+        return Response({
+            'message': 'Password changed successfully',
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+        }, status=status.HTTP_200_OK)

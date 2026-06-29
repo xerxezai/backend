@@ -6,6 +6,7 @@ Uses soft coding configuration for maximum flexibility
 import os
 import sys
 from pathlib import Path
+from datetime import timedelta
 
 # Build paths inside the project
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -40,6 +41,7 @@ DJANGO_APPS = [
 THIRD_PARTY_APPS = [
     'rest_framework',
     'rest_framework.authtoken',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'drf_yasg',  # API documentation
     'django_filters',
@@ -131,6 +133,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # REST Framework configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
@@ -156,6 +159,16 @@ REST_FRAMEWORK = {
         'anon': backend_config.get('api.rate_limiting.default_rate'),
         'user': backend_config.get('api.rate_limiting.auth_rate')
     }
+}
+
+# JWT configuration
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'SIGNING_KEY': os.getenv('JWT_SECRET_KEY', os.getenv('DJANGO_SECRET_KEY', 'fallback-jwt-secret')),
 }
 
 # CORS configuration
