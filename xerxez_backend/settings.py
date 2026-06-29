@@ -260,9 +260,10 @@ if not DEBUG:
     SECURE_HSTS_PRELOAD = True
     SECURE_HSTS_SECONDS = 3600
     
-    if backend_config.get('production.ssl_redirect') and os.getenv('SECURE_SSL_REDIRECT', 'True').lower() in ('true', '1', 'yes'):
-        SECURE_SSL_REDIRECT = True
-        SECURE_PROXY_SSL_HEADER = backend_config.get('production.secure_proxy_ssl_header')
+    # Railway terminates SSL at the proxy — Django must NOT redirect HTTP→HTTPS
+    # or the health-check loops. Set SECURE_SSL_REDIRECT=True in Railway env to opt in.
+    SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'False').lower() in ('true', '1', 'yes')
+    SECURE_PROXY_SSL_HEADER = backend_config.get('production.secure_proxy_ssl_header')
 
 # Development-specific settings
 if DEBUG:
