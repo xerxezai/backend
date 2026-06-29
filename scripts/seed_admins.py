@@ -3,8 +3,10 @@ Seed ERP admin accounts.
 Run: python manage.py shell < scripts/seed_admins.py
 """
 
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from apps.users.models import UserProfile
+
+User = get_user_model()
 
 ACCOUNTS = [
     {"username": "Tanzeem", "password": "[REDACTED]", "role": "manager", "first_name": "Tanzeem", "is_staff": True},

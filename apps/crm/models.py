@@ -1,5 +1,5 @@
 """CRM models: Customers, Leads, Contacts, Activities."""
-from django.contrib.auth.models import User
+from django.conf import settings
 from django.db import models
 
 
@@ -61,7 +61,7 @@ class Lead(models.Model):
     source = models.CharField(max_length=20, choices=SOURCE, default='website')
     status = models.CharField(max_length=20, choices=STATUS, default='new')
     estimated_value = models.DecimalField(max_digits=14, decimal_places=2, default=0)
-    assigned_to = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='crm_leads')
+    assigned_to = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='crm_leads')
     customer = models.ForeignKey(Customer, null=True, blank=True, on_delete=models.SET_NULL, related_name='leads')
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -86,7 +86,7 @@ class Activity(models.Model):
     summary = models.CharField(max_length=255)
     body = models.TextField(blank=True)
     occurred_at = models.DateTimeField()
-    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     lead = models.ForeignKey(Lead, null=True, blank=True, on_delete=models.CASCADE, related_name='activities')
     customer = models.ForeignKey(Customer, null=True, blank=True, on_delete=models.CASCADE, related_name='activities')
 

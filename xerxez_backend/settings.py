@@ -48,7 +48,7 @@ THIRD_PARTY_APPS = [
     'django_extensions',
 ]
 
-LOCAL_APPS = backend_config.get_enabled_apps()
+LOCAL_APPS = backend_config.get_enabled_apps() + ['apps.accounts']
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
@@ -129,6 +129,9 @@ MEDIA_ROOT = backend_config.get('paths.media')
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Custom User model
+AUTH_USER_MODEL = 'accounts.User'
 
 # REST Framework configuration
 REST_FRAMEWORK = {

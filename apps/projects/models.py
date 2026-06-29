@@ -1,5 +1,5 @@
 """Project & Task models."""
-from django.contrib.auth.models import User
+from django.conf import settings
 from django.db import models
 
 from apps.crm.models import Customer
@@ -17,7 +17,7 @@ class Project(models.Model):
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     customer = models.ForeignKey(Customer, null=True, blank=True, on_delete=models.SET_NULL, related_name='projects')
-    manager = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='managed_projects')
+    manager = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='managed_projects')
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS, default='planned')
@@ -48,7 +48,7 @@ class Task(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='tasks')
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True)
-    assignee = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='tasks')
+    assignee = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='tasks')
     status = models.CharField(max_length=20, choices=STATUS, default='todo')
     priority = models.CharField(max_length=10, choices=PRIORITY, default='medium')
     due_date = models.DateField(null=True, blank=True)
@@ -64,7 +64,7 @@ class Task(models.Model):
 
 class TimeEntry(models.Model):
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='time_entries')
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='time_entries')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='time_entries')
     date = models.DateField()
     hours = models.DecimalField(max_digits=5, decimal_places=2)
     notes = models.TextField(blank=True)
