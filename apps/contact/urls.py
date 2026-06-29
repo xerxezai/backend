@@ -1,16 +1,8 @@
-"""
-URL configuration for Contact app
-"""
-
 from django.urls import path
-from rest_framework.routers import DefaultRouter
+from .views import ContactMessageCreateView
 
 app_name = 'contact'
-router = DefaultRouter()
-
-# Add viewsets to router when created
-# router.register('messages', ContactMessageViewSet)
 
 urlpatterns = [
-    # Add URL patterns here
-] + router.urls
+    path('', ContactMessageCreateView.as_view(), name='contact-submit'),
+]
