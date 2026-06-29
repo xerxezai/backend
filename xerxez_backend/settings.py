@@ -54,8 +54,8 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -175,6 +175,7 @@ SIMPLE_JWT = {
 }
 
 # CORS configuration
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = backend_config.get('api.cors.allowed_origins')
 CORS_ALLOW_CREDENTIALS = backend_config.get('api.cors.allow_credentials')
 CORS_PREFLIGHT_MAX_AGE = backend_config.get('api.cors.max_age')
