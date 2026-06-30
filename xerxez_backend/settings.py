@@ -205,6 +205,8 @@ EMAIL_PORT = backend_config.get('integrations.email.port')
 EMAIL_USE_TLS = backend_config.get('integrations.email.use_tls')
 EMAIL_HOST_USER = backend_config.get('integrations.email.user')
 EMAIL_HOST_PASSWORD = backend_config.get('integrations.email.password')
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or 'xerxez.in@gmail.com'
+CONTACT_ADMIN_EMAIL = os.getenv('CONTACT_ADMIN_EMAIL', 'xerxez.in@gmail.com')
 
 # Cache configuration
 CACHES = {
