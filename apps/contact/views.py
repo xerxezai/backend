@@ -179,7 +179,15 @@ class ContactMessageCreateView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        instance: ContactMessage = serializer.save()
+        try:
+            instance: ContactMessage = serializer.save()
+        except Exception as exc:
+            logger.error("Contact save failed: %s", exc, exc_info=True)
+            return Response(
+                {'success': False, 'message': 'Failed to save your message. Please try again later.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         from_addr = settings.EMAIL_HOST_USER or ADMIN_EMAIL
 
         # 1. Notify XERXEZ team

@@ -184,8 +184,8 @@ SIMPLE_JWT = {
     'SIGNING_KEY': os.getenv('JWT_SECRET_KEY', os.getenv('DJANGO_SECRET_KEY', 'fallback-jwt-secret')),
 }
 
-# CORS configuration
-CORS_ALLOW_ALL_ORIGINS = False
+# CORS configuration — allow all origins so contact form works from any deployment URL
+CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWED_ORIGINS = backend_config.get('api.cors.allowed_origins')
 CORS_ALLOW_CREDENTIALS = backend_config.get('api.cors.allow_credentials')
 CORS_PREFLIGHT_MAX_AGE = backend_config.get('api.cors.max_age')
