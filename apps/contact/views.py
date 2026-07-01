@@ -174,6 +174,10 @@ info@xerxez.com | xerxez.com
 class ContactMessageCreateView(APIView):
     permission_classes = [AllowAny]
 
+    def get(self, request):
+        """Pre-warm endpoint — keeps Railway awake and confirms API is ready."""
+        return Response({"status": "ready", "endpoint": "contact"}, status=status.HTTP_200_OK)
+
     def post(self, request):
         serializer = ContactMessageSerializer(data=request.data)
         if not serializer.is_valid():
