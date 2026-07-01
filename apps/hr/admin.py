@@ -1,6 +1,7 @@
 from django.contrib import admin
 
-from .models import Attendance, Department, Employee, LeaveRequest
+from .models import (Attendance, Department, Employee, LeaveRequest, PaySlip,
+                     Payroll, SalaryStructure, Shift)
 
 
 @admin.register(Department)
@@ -20,13 +21,41 @@ class EmployeeAdmin(admin.ModelAdmin):
 
 @admin.register(Attendance)
 class AttendanceAdmin(admin.ModelAdmin):
-    list_display = ('employee', 'date', 'check_in', 'check_out', 'hours')
-    list_filter = ('date',)
+    list_display = ('employee', 'date', 'check_in', 'check_out', 'hours', 'status')
+    list_filter = ('date', 'status')
     autocomplete_fields = ('employee',)
 
 
 @admin.register(LeaveRequest)
 class LeaveRequestAdmin(admin.ModelAdmin):
-    list_display = ('employee', 'type', 'from_date', 'to_date', 'days', 'status')
+    list_display = ('employee', 'type', 'from_date', 'to_date', 'days', 'status', 'decided_by')
     list_filter = ('status', 'type')
     autocomplete_fields = ('employee', 'decided_by')
+
+
+@admin.register(Shift)
+class ShiftAdmin(admin.ModelAdmin):
+    list_display = ('name', 'start_time', 'end_time')
+    search_fields = ('name',)
+    filter_horizontal = ('employees',)
+
+
+@admin.register(SalaryStructure)
+class SalaryStructureAdmin(admin.ModelAdmin):
+    list_display = ('employee', 'basic_salary', 'effective_date')
+    search_fields = ('employee__full_name', 'employee__code')
+    autocomplete_fields = ('employee',)
+
+
+@admin.register(Payroll)
+class PayrollAdmin(admin.ModelAdmin):
+    list_display = ('employee', 'month', 'year', 'working_days', 'present_days', 'gross', 'net_salary', 'status', 'paid_at')
+    list_filter = ('status', 'year', 'month')
+    search_fields = ('employee__full_name', 'employee__code')
+    autocomplete_fields = ('employee', 'generated_by')
+
+
+@admin.register(PaySlip)
+class PaySlipAdmin(admin.ModelAdmin):
+    list_display = ('payroll', 'pdf_ref', 'generated_at')
+    search_fields = ('payroll__employee__full_name',)
