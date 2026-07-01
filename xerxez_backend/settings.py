@@ -94,18 +94,36 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'xerxez_backend.wsgi.application'
 
-# Database configuration using soft coding
-DATABASES = {
-    'default': {
-        'ENGINE': backend_config.get('database.default.engine'),
-        'NAME': backend_config.get('database.default.name'),
-        'USER': backend_config.get('database.default.user'),
-        'PASSWORD': backend_config.get('database.default.password'),
-        'HOST': backend_config.get('database.default.host'),
-        'PORT': backend_config.get('database.default.port'),
-        'OPTIONS': backend_config.get('database.default.options', {}),
+# Database configuration — prefer DATABASE_URL (Railway/Heroku standard) then fall back to individual vars
+import urllib.parse as _urlparse
+
+_DATABASE_URL = os.environ.get('DATABASE_URL') or os.environ.get('POSTGRES_URL')
+if _DATABASE_URL:
+    # Parse postgresql://user:pass@host:port/name
+    _u = _urlparse.urlparse(_DATABASE_URL)
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': _u.path.lstrip('/'),
+            'USER': _u.username or '',
+            'PASSWORD': _u.password or '',
+            'HOST': _u.hostname or 'localhost',
+            'PORT': str(_u.port or 5432),
+            'OPTIONS': {'sslmode': 'require', 'connect_timeout': 10},
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': backend_config.get('database.default.engine'),
+            'NAME': backend_config.get('database.default.name'),
+            'USER': backend_config.get('database.default.user'),
+            'PASSWORD': backend_config.get('database.default.password'),
+            'HOST': backend_config.get('database.default.host'),
+            'PORT': backend_config.get('database.default.port'),
+            'OPTIONS': {**backend_config.get('database.default.options', {}), 'connect_timeout': 10},
+        }
+    }
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
