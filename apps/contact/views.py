@@ -203,7 +203,7 @@ class ContactMessageCreateView(APIView):
                 from_email=from_addr,
                 recipient_list=[ADMIN_EMAIL],
                 html_message=html,
-                fail_silently=False,
+                fail_silently=True,
             )
         except Exception as exc:
             logger.error("Contact notification email failed: %s", exc)
