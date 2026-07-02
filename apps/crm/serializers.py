@@ -2,6 +2,15 @@ from rest_framework import serializers
 from .models import Customer, Contact, Lead, Activity
 
 
+def _gen_code(model, prefix, pad=4):
+    n = model.objects.count()
+    while True:
+        code = f"{prefix}{str(n + 1).zfill(pad)}"
+        if not model.objects.filter(code=code).exists():
+            return code
+        n += 1
+
+
 class ContactInlineSerializer(serializers.ModelSerializer):
     class Meta:
         model = Contact
@@ -9,11 +18,17 @@ class ContactInlineSerializer(serializers.ModelSerializer):
 
 
 class CustomerSerializer(serializers.ModelSerializer):
+    code = serializers.CharField(required=False, allow_blank=True)
     contacts = ContactInlineSerializer(many=True, read_only=True)
 
     class Meta:
         model = Customer
         fields = '__all__'
+
+    def create(self, validated_data):
+        if not validated_data.get('code'):
+            validated_data['code'] = _gen_code(Customer, 'CUST')
+        return super().create(validated_data)
 
 
 class ContactSerializer(serializers.ModelSerializer):

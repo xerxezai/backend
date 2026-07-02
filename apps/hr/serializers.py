@@ -2,21 +2,42 @@ from rest_framework import serializers
 from .models import Department, Employee, Attendance, LeaveRequest, Shift, SalaryStructure, Payroll, PaySlip
 
 
+def _gen_code(model, prefix, pad=3):
+    n = model.objects.count()
+    while True:
+        code = f"{prefix}{str(n + 1).zfill(pad)}"
+        if not model.objects.filter(code=code).exists():
+            return code
+        n += 1
+
+
 class DepartmentSerializer(serializers.ModelSerializer):
+    code = serializers.CharField(required=False, allow_blank=True)
     manager_username = serializers.CharField(source='manager.username', read_only=True)
 
     class Meta:
         model = Department
         fields = '__all__'
 
+    def create(self, validated_data):
+        if not validated_data.get('code'):
+            validated_data['code'] = _gen_code(Department, 'DEPT')
+        return super().create(validated_data)
+
 
 class EmployeeSerializer(serializers.ModelSerializer):
+    code = serializers.CharField(required=False, allow_blank=True)
     department_name = serializers.CharField(source='department.name', read_only=True)
     user_username = serializers.CharField(source='user.username', read_only=True)
 
     class Meta:
         model = Employee
         fields = '__all__'
+
+    def create(self, validated_data):
+        if not validated_data.get('code'):
+            validated_data['code'] = _gen_code(Employee, 'EMP')
+        return super().create(validated_data)
 
 
 class AttendanceSerializer(serializers.ModelSerializer):
