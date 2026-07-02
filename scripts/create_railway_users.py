@@ -8,8 +8,22 @@ from apps.users.models import UserProfile
 User = get_user_model()
 
 ACCOUNTS = [
-    {'username': 'Danish', 'password': '[REDACTED]', 'role': 'admin', 'first_name': 'Danish', 'is_staff': True},
-    {'username': 'Tanzeem', 'password': '[REDACTED]', 'role': 'manager', 'first_name': 'Tanzeem', 'is_staff': True},
+    {
+        'username': 'Danish',
+        'password': '[REDACTED]',
+        'role': 'super_admin',
+        'first_name': 'Danish',
+        'is_staff': True,
+        'is_superuser': True,
+    },
+    {
+        'username': 'Tanzeem',
+        'password': '[REDACTED]',
+        'role': 'super_admin',
+        'first_name': 'Tanzeem',
+        'is_staff': True,
+        'is_superuser': True,
+    },
 ]
 
 for acc in ACCOUNTS:
@@ -17,10 +31,10 @@ for acc in ACCOUNTS:
     user.set_password(acc['password'])
     user.first_name = acc['first_name']
     user.is_staff = acc['is_staff']
-    user.role = acc['role']
+    user.is_superuser = acc['is_superuser']
     user.is_active = True
     user.save()
     profile, _ = UserProfile.objects.get_or_create(user=user)
     profile.role = acc['role']
     profile.save()
-    print(('Created' if created else 'Updated') + ': ' + acc['username'])
+    print(('Created' if created else 'Updated') + ': ' + acc['username'] + ' (superuser=' + str(acc['is_superuser']) + ')')
