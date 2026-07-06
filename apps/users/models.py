@@ -23,9 +23,10 @@ class UserProfile(models.Model):
 
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_user_profile(sender, instance, created, **kwargs):
-    if created:
-        # Use a savepoint so that a FK-mismatch failure only rolls back the
-        # signal's work — not the outer transaction that just saved the user.
+    # LMA registration sets _skip_profile_signal=True on the instance so the
+    # signal never fires a DB query — avoids the FK mismatch between
+    # users_userprofile (pointing to auth_user) and accounts.User table.
+    if created and not getattr(instance, '_skip_profile_signal', False):
         try:
             with transaction.atomic():
                 UserProfile.objects.get_or_create(user=instance)

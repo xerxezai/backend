@@ -125,6 +125,7 @@ def lma_register(request):
                 is_active=True,
             )
             user.set_password(password)
+            user._skip_profile_signal = True  # skip ERP UserProfile signal
             user.save()
 
             # get_or_create in case the post_save signal already created one
