@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
@@ -24,10 +24,10 @@ class UserProfile(models.Model):
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_user_profile(sender, instance, created, **kwargs):
     if created:
+        # Use a savepoint so that a FK-mismatch failure only rolls back the
+        # signal's work — not the outer transaction that just saved the user.
         try:
-            UserProfile.objects.get_or_create(user=instance)
+            with transaction.atomic():
+                UserProfile.objects.get_or_create(user=instance)
         except Exception:
-            # UserProfile FK may point to a different DB table than the custom
-            # user model (legacy migration mismatch). LMA users don't need an
-            # ERP UserProfile, so silently skip.
             pass

@@ -2,6 +2,7 @@
 LMA (Learning Management Application) Views
 """
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -117,31 +118,31 @@ def lma_register(request):
 
     parts = name.split(' ', 1)
     try:
-        user = User(
-            username=username, email=email,
-            first_name=parts[0], last_name=parts[1] if len(parts) > 1 else '',
-            is_active=True,
-        )
-        user.set_password(password)
-        user.save()
+        with transaction.atomic():
+            user = User(
+                username=username, email=email,
+                first_name=parts[0], last_name=parts[1] if len(parts) > 1 else '',
+                is_active=True,
+            )
+            user.set_password(password)
+            user.save()
+
+            # get_or_create in case the post_save signal already created one
+            profile, _ = LMAProfile.objects.get_or_create(
+                user=user,
+                defaults={
+                    'lma_role': 'student',
+                    'can_access_student': True,
+                    'can_access_instructor': False,
+                    'bio': '',
+                },
+            )
+            if profile.lma_role not in ('instructor', 'both'):
+                profile.lma_role = 'student'
+            profile.can_access_student = True
+            profile.save()
     except Exception as exc:
         return Response({'error': f'Could not create account: {exc}'}, status=400)
-
-    # get_or_create in case the post_save signal already created one
-    profile, _ = LMAProfile.objects.get_or_create(
-        user=user,
-        defaults={
-            'lma_role': 'student',
-            'can_access_student': True,
-            'can_access_instructor': False,
-            'bio': '',
-        },
-    )
-    # Ensure correct flags even if profile pre-existed
-    if profile.lma_role not in ('instructor', 'both'):
-        profile.lma_role = 'student'
-    profile.can_access_student = True
-    profile.save()
 
     return Response({
         'lma_token': _lma_token(user),
