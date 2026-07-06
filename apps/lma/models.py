@@ -16,7 +16,7 @@ class LMAProfile(models.Model):
     lma_role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student')
     can_access_student = models.BooleanField(default=True)
     can_access_instructor = models.BooleanField(default=False)
-    bio = models.TextField(blank=True)
+    bio = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

@@ -116,24 +116,38 @@ def lma_register(request):
         username = f"{base}{n}"; n += 1
 
     parts = name.split(' ', 1)
-    user = User(
-        username=username, email=email,
-        first_name=parts[0], last_name=parts[1] if len(parts) > 1 else '',
-        is_active=True,
-    )
-    user.set_password(password)
-    user.save()
+    try:
+        user = User(
+            username=username, email=email,
+            first_name=parts[0], last_name=parts[1] if len(parts) > 1 else '',
+            is_active=True,
+        )
+        user.set_password(password)
+        user.save()
+    except Exception as exc:
+        return Response({'error': f'Could not create account: {exc}'}, status=400)
 
-    LMAProfile.objects.create(
-        user=user, lma_role='student',
-        can_access_student=True, can_access_instructor=False,
+    # get_or_create in case the post_save signal already created one
+    profile, _ = LMAProfile.objects.get_or_create(
+        user=user,
+        defaults={
+            'lma_role': 'student',
+            'can_access_student': True,
+            'can_access_instructor': False,
+            'bio': '',
+        },
     )
+    # Ensure correct flags even if profile pre-existed
+    if profile.lma_role not in ('instructor', 'both'):
+        profile.lma_role = 'student'
+    profile.can_access_student = True
+    profile.save()
 
     return Response({
         'lma_token': _lma_token(user),
         'lma_role': 'student',
         'can_access_student': True,
-        'can_access_instructor': False,
+        'can_access_instructor': profile.can_access_instructor,
         'name': name,
         'user_id': user.id,
     }, status=201)
