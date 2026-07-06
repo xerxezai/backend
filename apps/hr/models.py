@@ -139,7 +139,9 @@ class Payroll(models.Model):
 
     class Meta:
         ordering = ['-year', '-month']
-        unique_together = [('employee', 'month', 'year')]
+        constraints = [
+            models.UniqueConstraint(fields=['employee', 'month', 'year'], name='unique_payroll_per_employee_month')
+        ]
 
     def __str__(self):
         return f'{self.employee} {self.month}/{self.year}'
