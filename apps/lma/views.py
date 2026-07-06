@@ -10,8 +10,8 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import (
-    LMAProfile, Course, Enrollment, Assignment,
-    Submission, Certificate, Review,
+    LMAProfile, Course, Module, Lesson, Enrollment, Assignment,
+    Submission, Certificate, Review, LessonProgress,
 )
 from .serializers import (
     CourseListSerializer, CourseDetailSerializer, EnrollmentSerializer,
@@ -281,6 +281,44 @@ def submit_assignment(request, assignment_id):
         submission.save()
 
     return Response(SubmissionSerializer(submission).data, status=201 if created else 200)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def lesson_complete(request, lesson_id):
+    """POST /api/v1/lma/lessons/{lesson_id}/complete/"""
+    try:
+        lesson = Lesson.objects.select_related('module__course').get(id=lesson_id)
+    except Lesson.DoesNotExist:
+        return Response({'error': 'Lesson not found.'}, status=404)
+
+    course = lesson.module.course
+    try:
+        enrollment = Enrollment.objects.get(student=request.user, course=course)
+    except Enrollment.DoesNotExist:
+        return Response({'error': 'Not enrolled in this course.'}, status=403)
+
+    LessonProgress.objects.get_or_create(student=request.user, lesson=lesson)
+
+    total_lessons = Lesson.objects.filter(module__course=course).count()
+    completed_count = LessonProgress.objects.filter(
+        student=request.user, lesson__module__course=course
+    ).count()
+
+    new_progress = int((completed_count / max(total_lessons, 1)) * 100)
+    enrollment.progress = new_progress
+    if new_progress >= 100:
+        enrollment.completed = True
+        if not enrollment.completed_at:
+            enrollment.completed_at = timezone.now()
+        Certificate.objects.get_or_create(student=request.user, course=course)
+    enrollment.save(update_fields=['progress', 'completed', 'completed_at'])
+
+    return Response({
+        'completed': True,
+        'progress': new_progress,
+        'course_completed': enrollment.completed,
+    })
 
 
 @api_view(['PUT'])

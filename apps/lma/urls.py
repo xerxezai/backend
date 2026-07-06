@@ -22,6 +22,9 @@ urlpatterns = [
     path('courses/create/', views.create_course, name='lma-create-course'),
     path('courses/<int:course_id>/update/', views.update_course, name='lma-update-course'),
 
+    # Lessons
+    path('lessons/<int:lesson_id>/complete/', views.lesson_complete, name='lma-lesson-complete'),
+
     # Assignments
     path('assignments/<int:assignment_id>/submit/', views.submit_assignment, name='lma-submit-assignment'),
     path('submissions/<int:submission_id>/grade/', views.grade_submission, name='lma-grade-submission'),
