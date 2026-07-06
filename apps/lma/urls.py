@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     # Auth
     path('auth/login/', views.lma_login, name='lma-login'),
+    path('auth/register/', views.lma_register, name='lma-register'),
 
     # Courses (public)
     path('courses/', views.course_list, name='lma-course-list'),
@@ -12,6 +13,7 @@ urlpatterns = [
     # Enrollment
     path('enroll/<int:course_id>/', views.enroll, name='lma-enroll'),
     path('mock-payment/<int:course_id>/', views.mock_payment, name='lma-mock-payment'),
+    path('enrollment-status/<int:course_id>/', views.enrollment_status, name='lma-enrollment-status'),
 
     # Student
     path('student/dashboard/', views.student_dashboard, name='lma-student-dashboard'),

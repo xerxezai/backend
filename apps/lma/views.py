@@ -24,6 +24,9 @@ User = get_user_model()
 INSTRUCTOR_USERNAMES = {'Danish', 'Tanzeem'}
 
 
+import re as _re
+
+
 def _get_or_create_lma_profile(user):
     profile, _ = LMAProfile.objects.get_or_create(user=user)
     if user.username in INSTRUCTOR_USERNAMES:
@@ -87,6 +90,53 @@ def lma_login(request):
         'name': name,
         'user_id': user.id,
     })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def lma_register(request):
+    """POST /api/v1/lma/auth/register/"""
+    name = request.data.get('name', '').strip()
+    email = request.data.get('email', '').strip().lower()
+    password = request.data.get('password', '')
+
+    if not name or not email or not password:
+        return Response({'error': 'Name, email and password are required.'}, status=400)
+    if len(password) < 6:
+        return Response({'error': 'Password must be at least 6 characters.'}, status=400)
+    if not _re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
+        return Response({'error': 'Enter a valid email address.'}, status=400)
+    if User.objects.filter(email=email).exists():
+        return Response({'error': 'An account with this email already exists.'}, status=400)
+
+    # Generate unique username from email prefix
+    base = _re.sub(r'[^a-z0-9_]', '', email.split('@')[0]) or 'user'
+    username, n = base, 1
+    while User.objects.filter(username=username).exists():
+        username = f"{base}{n}"; n += 1
+
+    parts = name.split(' ', 1)
+    user = User(
+        username=username, email=email,
+        first_name=parts[0], last_name=parts[1] if len(parts) > 1 else '',
+        is_active=True,
+    )
+    user.set_password(password)
+    user.save()
+
+    LMAProfile.objects.create(
+        user=user, lma_role='student',
+        can_access_student=True, can_access_instructor=False,
+    )
+
+    return Response({
+        'lma_token': _lma_token(user),
+        'lma_role': 'student',
+        'can_access_student': True,
+        'can_access_instructor': False,
+        'name': name,
+        'user_id': user.id,
+    }, status=201)
 
 
 # ── Courses (public) ────────────────────────────────────────────────────────
@@ -281,6 +331,14 @@ def submit_assignment(request, assignment_id):
         submission.save()
 
     return Response(SubmissionSerializer(submission).data, status=201 if created else 200)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def enrollment_status(request, course_id):
+    """GET /api/v1/lma/enrollment-status/{course_id}/"""
+    enrolled = Enrollment.objects.filter(student=request.user, course_id=course_id).exists()
+    return Response({'enrolled': enrolled})
 
 
 @api_view(['POST'])
