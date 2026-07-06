@@ -24,4 +24,10 @@ class UserProfile(models.Model):
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_user_profile(sender, instance, created, **kwargs):
     if created:
-        UserProfile.objects.get_or_create(user=instance)
+        try:
+            UserProfile.objects.get_or_create(user=instance)
+        except Exception:
+            # UserProfile FK may point to a different DB table than the custom
+            # user model (legacy migration mismatch). LMA users don't need an
+            # ERP UserProfile, so silently skip.
+            pass
