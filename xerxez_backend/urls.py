@@ -60,6 +60,9 @@ api_patterns = [
 
     # MLM module
     path('mlm/', include('apps.mlm.urls')),
+
+    # LMA module
+    path('lma/', include('apps.lma.urls')),
 ]
 
 

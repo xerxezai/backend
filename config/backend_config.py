@@ -182,6 +182,11 @@ class BackendConfig:
                 'mlm': {
                     'enabled': True,
                     'path': 'apps.mlm'
+                },
+                # ---- LMA module ----
+                'lma': {
+                    'enabled': True,
+                    'path': 'apps.lma'
                 }
             },
             

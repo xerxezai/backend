@@ -1,0 +1,303 @@
+"""
+LMA (Learning Management Application) Views
+"""
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework_simplejwt.tokens import RefreshToken
+
+from .models import (
+    LMAProfile, Course, Enrollment, Assignment,
+    Submission, Certificate, Review,
+)
+from .serializers import (
+    CourseListSerializer, CourseDetailSerializer, EnrollmentSerializer,
+    AssignmentSerializer, SubmissionSerializer, CertificateSerializer,
+    ReviewSerializer, CourseCreateSerializer,
+)
+
+User = get_user_model()
+
+INSTRUCTOR_USERNAMES = {'Danish', 'Tanzeem'}
+
+
+def _get_or_create_lma_profile(user):
+    profile, _ = LMAProfile.objects.get_or_create(user=user)
+    if user.username in INSTRUCTOR_USERNAMES:
+        profile.lma_role = 'both'
+        profile.can_access_student = True
+        profile.can_access_instructor = True
+        profile.save()
+    return profile
+
+
+def _lma_token(user):
+    refresh = RefreshToken.for_user(user)
+    return str(refresh.access_token)
+
+
+# ── Auth ────────────────────────────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def lma_login(request):
+    """POST /api/v1/lma/auth/login/"""
+    email = request.data.get('email', '').strip()
+    password = request.data.get('password', '')
+    role = request.data.get('role', 'student')
+
+    if not email or not password:
+        return Response({'error': 'Email and password are required.'}, status=400)
+
+    # Find user by email or username
+    user = None
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        try:
+            user = User.objects.get(username=email)
+        except User.DoesNotExist:
+            pass
+
+    if not user or not user.check_password(password):
+        return Response({'error': 'Invalid credentials.'}, status=401)
+
+    if not user.is_active:
+        return Response({'error': 'Account is inactive.'}, status=401)
+
+    profile = _get_or_create_lma_profile(user)
+
+    if role == 'instructor' and not profile.can_access_instructor:
+        return Response(
+            {'error': "You don't have instructor access. Contact admin to request access."},
+            status=403,
+        )
+
+    token = _lma_token(user)
+    name = user.get_full_name() or user.username
+
+    return Response({
+        'lma_token': token,
+        'lma_role': role,
+        'can_access_student': profile.can_access_student,
+        'can_access_instructor': profile.can_access_instructor,
+        'name': name,
+        'user_id': user.id,
+    })
+
+
+# ── Courses (public) ────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def course_list(request):
+    """GET /api/v1/lma/courses/"""
+    qs = Course.objects.filter(status='published').select_related('instructor')
+    serializer = CourseListSerializer(qs, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def course_detail(request, course_id):
+    """GET /api/v1/lma/courses/{id}/"""
+    try:
+        course = Course.objects.prefetch_related(
+            'modules', 'modules__lessons'
+        ).get(id=course_id)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found.'}, status=404)
+    return Response(CourseDetailSerializer(course).data)
+
+
+# ── Enrollment & Payment ────────────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def enroll(request, course_id):
+    """POST /api/v1/lma/enroll/{course_id}/"""
+    try:
+        course = Course.objects.get(id=course_id)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found.'}, status=404)
+
+    enrollment, created = Enrollment.objects.get_or_create(
+        student=request.user, course=course
+    )
+    if not created:
+        return Response({'message': 'Already enrolled.'}, status=200)
+
+    course.total_students += 1
+    course.save(update_fields=['total_students'])
+
+    return Response(EnrollmentSerializer(enrollment).data, status=201)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mock_payment(request, course_id):
+    """POST /api/v1/lma/mock-payment/{course_id}/ — simulates payment then enrolls."""
+    try:
+        course = Course.objects.get(id=course_id)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found.'}, status=404)
+
+    enrollment, created = Enrollment.objects.get_or_create(
+        student=request.user, course=course
+    )
+    if created:
+        course.total_students += 1
+        course.save(update_fields=['total_students'])
+
+    return Response({
+        'success': True,
+        'message': f'Payment successful! You are now enrolled in "{course.title}".',
+        'enrollment': EnrollmentSerializer(enrollment).data,
+    })
+
+
+# ── Student ─────────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_dashboard(request):
+    """GET /api/v1/lma/student/dashboard/"""
+    user = request.user
+    enrollments = Enrollment.objects.filter(student=user).select_related('course', 'course__instructor')
+    certificates = Certificate.objects.filter(student=user).select_related('course')
+
+    enrolled_course_ids = enrollments.values_list('course_id', flat=True)
+    pending_assignments = Assignment.objects.filter(
+        course_id__in=enrolled_course_ids,
+        due_date__gte=timezone.now(),
+    ).select_related('course').order_by('due_date')[:10]
+
+    return Response({
+        'name': user.get_full_name() or user.username,
+        'stats': {
+            'enrolled': enrollments.count(),
+            'completed': enrollments.filter(completed=True).count(),
+            'pending_assignments': pending_assignments.count(),
+            'certificates': certificates.count(),
+        },
+        'enrollments': EnrollmentSerializer(enrollments, many=True).data,
+        'certificates': CertificateSerializer(certificates, many=True).data,
+        'pending_assignments': AssignmentSerializer(pending_assignments, many=True).data,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_certificates(request):
+    """GET /api/v1/lma/certificates/"""
+    certs = Certificate.objects.filter(student=request.user).select_related('course')
+    return Response(CertificateSerializer(certs, many=True).data)
+
+
+# ── Instructor ───────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def instructor_dashboard(request):
+    """GET /api/v1/lma/instructor/dashboard/"""
+    user = request.user
+    courses = Course.objects.filter(instructor=user).order_by('-created_at')
+    course_ids = courses.values_list('id', flat=True)
+
+    pending_submissions = Submission.objects.filter(
+        assignment__course_id__in=course_ids,
+        grade__isnull=True,
+    ).select_related('assignment', 'student')[:20]
+
+    total_students = sum(c.total_students for c in courses)
+    total_revenue = sum(float(c.price) * c.total_students for c in courses)
+
+    return Response({
+        'name': user.get_full_name() or user.username,
+        'stats': {
+            'total_courses': courses.count(),
+            'total_students': total_students,
+            'pending_reviews': pending_submissions.count(),
+            'total_earnings': round(total_revenue, 2),
+        },
+        'courses': CourseListSerializer(courses, many=True).data,
+        'pending_submissions': SubmissionSerializer(pending_submissions, many=True).data,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_course(request):
+    """POST /api/v1/lma/courses/create/"""
+    profile = _get_or_create_lma_profile(request.user)
+    if not profile.can_access_instructor:
+        return Response({'error': 'Instructor access required.'}, status=403)
+
+    serializer = CourseCreateSerializer(data=request.data)
+    if serializer.is_valid():
+        course = serializer.save(instructor=request.user)
+        return Response(CourseListSerializer(course).data, status=201)
+    return Response(serializer.errors, status=400)
+
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def update_course(request, course_id):
+    """PUT /api/v1/lma/courses/{id}/update/"""
+    try:
+        course = Course.objects.get(id=course_id, instructor=request.user)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found or not yours.'}, status=404)
+
+    serializer = CourseCreateSerializer(course, data=request.data, partial=True)
+    if serializer.is_valid():
+        serializer.save()
+        return Response(CourseListSerializer(course).data)
+    return Response(serializer.errors, status=400)
+
+
+# ── Assignments ──────────────────────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def submit_assignment(request, assignment_id):
+    """POST /api/v1/lma/assignments/{id}/submit/"""
+    try:
+        assignment = Assignment.objects.get(id=assignment_id)
+    except Assignment.DoesNotExist:
+        return Response({'error': 'Assignment not found.'}, status=404)
+
+    submission, created = Submission.objects.get_or_create(
+        assignment=assignment,
+        student=request.user,
+        defaults={'content': request.data.get('content', '')},
+    )
+    if not created:
+        submission.content = request.data.get('content', submission.content)
+        submission.submitted_at = timezone.now()
+        submission.save()
+
+    return Response(SubmissionSerializer(submission).data, status=201 if created else 200)
+
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def grade_submission(request, submission_id):
+    """PUT /api/v1/lma/submissions/{id}/grade/"""
+    try:
+        submission = Submission.objects.get(id=submission_id)
+    except Submission.DoesNotExist:
+        return Response({'error': 'Submission not found.'}, status=404)
+
+    if submission.assignment.course.instructor != request.user:
+        return Response({'error': 'Permission denied.'}, status=403)
+
+    submission.grade = request.data.get('grade', submission.grade)
+    submission.feedback = request.data.get('feedback', submission.feedback)
+    submission.graded_at = timezone.now()
+    submission.save()
+
+    return Response(SubmissionSerializer(submission).data)
