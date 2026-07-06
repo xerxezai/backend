@@ -379,6 +379,180 @@ def lesson_complete(request, lesson_id):
     })
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_courses(request):
+    """GET /api/v1/lma/student/my-courses/ — Full enrollment list, no limit."""
+    enrollments = (
+        Enrollment.objects.filter(student=request.user)
+        .select_related('course', 'course__instructor')
+        .order_by('-enrolled_at')
+    )
+    return Response(EnrollmentSerializer(enrollments, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_assignments(request):
+    """GET /api/v1/lma/student/assignments/ — All assignments with submission status."""
+    enrolled_ids = (
+        Enrollment.objects.filter(student=request.user)
+        .values_list('course_id', flat=True)
+    )
+    assignments = (
+        Assignment.objects.filter(course_id__in=enrolled_ids)
+        .select_related('course')
+        .order_by('due_date')
+    )
+    submission_map = {
+        s.assignment_id: s
+        for s in Submission.objects.filter(
+            student=request.user,
+            assignment__in=assignments,
+        )
+    }
+    now = timezone.now()
+    data = []
+    for a in assignments:
+        sub = submission_map.get(a.id)
+        data.append({
+            'id': a.id,
+            'title': a.title,
+            'description': a.description,
+            'course_title': a.course.title,
+            'course_id': a.course_id,
+            'due_date': a.due_date.isoformat(),
+            'submitted': sub is not None,
+            'submission_id': sub.id if sub else None,
+            'grade': sub.grade if sub else None,
+            'overdue': (sub is None) and (a.due_date < now),
+        })
+    return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_progress(request):
+    """GET /api/v1/lma/student/progress/ — Progress report with time-series."""
+    from django.db.models import Avg, Count
+    from django.db.models.functions import TruncDate
+    from datetime import timedelta
+
+    user = request.user
+    enrollments = Enrollment.objects.filter(student=user).select_related('course')
+    total = enrollments.count()
+    completed = enrollments.filter(completed=True).count()
+    agg = enrollments.aggregate(avg=Avg('progress'))
+    avg_progress = int(agg['avg'] or 0)
+    certificates = Certificate.objects.filter(student=user).count()
+
+    courses_data = [
+        {
+            'course_id': e.course_id,
+            'course_title': e.course.title,
+            'progress': e.progress,
+            'completed': e.completed,
+            'enrolled_at': e.enrolled_at.isoformat(),
+        }
+        for e in enrollments.order_by('-enrolled_at')
+    ]
+
+    thirty_ago = timezone.now() - timedelta(days=30)
+    daily = (
+        LessonProgress.objects
+        .filter(student=user, completed_at__gte=thirty_ago)
+        .annotate(date=TruncDate('completed_at'))
+        .values('date')
+        .annotate(count=Count('id'))
+        .order_by('date')
+    )
+    timeline = [{'date': str(r['date']), 'lessons': r['count']} for r in daily]
+
+    return Response({
+        'stats': {
+            'total_courses': total,
+            'completed_courses': completed,
+            'avg_progress': avg_progress,
+            'certificates': certificates,
+        },
+        'courses': courses_data,
+        'timeline': timeline,
+    })
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def lma_profile(request):
+    """GET /api/v1/lma/profile/ — fetch; PUT — update."""
+    user = request.user
+    profile = _get_or_create_lma_profile(user)
+
+    if request.method == 'GET':
+        return Response({
+            'name': user.get_full_name() or user.username,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'email': user.email,
+            'phone': getattr(user, 'phone', ''),
+            'username': user.username,
+            'role': profile.lma_role,
+            'date_joined': user.date_joined.isoformat(),
+            'bio': profile.bio,
+        })
+
+    name = request.data.get('name', '').strip()
+    email = request.data.get('email', '').strip().lower()
+    phone = request.data.get('phone', '').strip()
+    bio = request.data.get('bio', '').strip()
+
+    if name:
+        parts = name.split(' ', 1)
+        user.first_name = parts[0]
+        user.last_name = parts[1] if len(parts) > 1 else ''
+
+    if email and email != user.email:
+        if User.objects.filter(email=email).exclude(pk=user.pk).exists():
+            return Response({'error': 'Email already in use.'}, status=400)
+        user.email = email
+
+    if hasattr(user, 'phone'):
+        user.phone = phone
+
+    user.save()
+    profile.bio = bio
+    profile.save()
+
+    return Response({'success': True, 'name': user.get_full_name() or user.username})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    """POST /api/v1/lma/profile/change-password/"""
+    current = request.data.get('current_password', '')
+    new_pw = request.data.get('new_password', '')
+
+    if not current or not new_pw:
+        return Response({'error': 'Both current and new password are required.'}, status=400)
+    if not request.user.check_password(current):
+        return Response({'error': 'Current password is incorrect.'}, status=400)
+    if len(new_pw) < 6:
+        return Response({'error': 'New password must be at least 6 characters.'}, status=400)
+
+    request.user.set_password(new_pw)
+    request.user.save()
+    return Response({'success': True})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def browse_courses(request):
+    """GET /api/v1/lma/courses/browse/ — Published courses excluding enrolled."""
+    enrolled_ids = Enrollment.objects.filter(student=request.user).values_list('course_id', flat=True)
+    qs = Course.objects.filter(status='published').exclude(id__in=enrolled_ids).select_related('instructor')
+    return Response(CourseListSerializer(qs, many=True).data)
+
+
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated])
 def grade_submission(request, submission_id):
