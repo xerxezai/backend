@@ -8,7 +8,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import AccessToken
 
 from .models import (
     LMAProfile, Course, Module, Lesson, Enrollment, Assignment,
@@ -39,8 +39,9 @@ def _get_or_create_lma_profile(user):
 
 
 def _lma_token(user):
-    refresh = RefreshToken.for_user(user)
-    return str(refresh.access_token)
+    # AccessToken is stateless — no OutstandingToken DB write, so no FK
+    # constraint issue between token_blacklist_outstandingtoken and auth_user.
+    return str(AccessToken.for_user(user))
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
