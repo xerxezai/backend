@@ -79,6 +79,7 @@ class Lesson(models.Model):
     order = models.IntegerField(default=0)
     is_free_preview = models.BooleanField(default=False)
     content = models.TextField(blank=True)
+    video_url = models.URLField(blank=True, default='')
 
     class Meta:
         ordering = ['order']

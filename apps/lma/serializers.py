@@ -11,12 +11,31 @@ class LessonSerializer(serializers.ModelSerializer):
         fields = ['id', 'title', 'duration', 'order', 'is_free_preview']
 
 
+class LessonDetailSerializer(serializers.ModelSerializer):
+    """Full lesson data including content + video_url — instructor only."""
+    class Meta:
+        model = Lesson
+        fields = ['id', 'title', 'duration', 'order', 'is_free_preview', 'content', 'video_url']
+
+
+class LessonWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Lesson
+        fields = ['title', 'duration', 'order', 'is_free_preview', 'content', 'video_url']
+
+
 class ModuleSerializer(serializers.ModelSerializer):
-    lessons = LessonSerializer(many=True, read_only=True)
+    lessons = LessonDetailSerializer(many=True, read_only=True)
 
     class Meta:
         model = Module
         fields = ['id', 'title', 'order', 'duration', 'lessons']
+
+
+class ModuleWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Module
+        fields = ['title', 'order', 'duration']
 
 
 class CourseListSerializer(serializers.ModelSerializer):

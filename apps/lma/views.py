@@ -18,6 +18,8 @@ from .serializers import (
     CourseListSerializer, CourseDetailSerializer, EnrollmentSerializer,
     AssignmentSerializer, SubmissionSerializer, CertificateSerializer,
     ReviewSerializer, CourseCreateSerializer,
+    ModuleSerializer, ModuleWriteSerializer,
+    LessonDetailSerializer, LessonWriteSerializer,
 )
 
 User = get_user_model()
@@ -588,3 +590,196 @@ def grade_submission(request, submission_id):
     submission.save()
 
     return Response(SubmissionSerializer(submission).data)
+
+
+# ── Instructor — courses CRUD ────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def instructor_courses(request):
+    """GET /api/v1/lma/instructor/courses/"""
+    profile = _get_or_create_lma_profile(request.user)
+    if not profile.can_access_instructor:
+        return Response({'error': 'Instructor access required.'}, status=403)
+    courses = Course.objects.filter(instructor=request.user).order_by('-created_at')
+    return Response(CourseListSerializer(courses, many=True).data)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_course(request, course_id):
+    """DELETE /api/v1/lma/courses/{id}/delete/"""
+    try:
+        course = Course.objects.get(id=course_id, instructor=request.user)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found or not yours.'}, status=404)
+    course.delete()
+    return Response({'success': True})
+
+
+# ── Instructor — module CRUD ─────────────────────────────────────────────────
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def course_modules(request, course_id):
+    """GET/POST /api/v1/lma/courses/{id}/modules/"""
+    try:
+        course = Course.objects.get(id=course_id, instructor=request.user)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found or not yours.'}, status=404)
+
+    if request.method == 'GET':
+        modules = Module.objects.filter(course=course).prefetch_related('lessons').order_by('order')
+        return Response(ModuleSerializer(modules, many=True).data)
+
+    serializer = ModuleWriteSerializer(data=request.data)
+    if serializer.is_valid():
+        module = serializer.save(course=course)
+        return Response(ModuleSerializer(module).data, status=201)
+    return Response(serializer.errors, status=400)
+
+
+@api_view(['PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def module_detail_view(request, module_id):
+    """PUT/DELETE /api/v1/lma/modules/{id}/"""
+    try:
+        module = Module.objects.select_related('course').get(
+            id=module_id, course__instructor=request.user
+        )
+    except Module.DoesNotExist:
+        return Response({'error': 'Module not found.'}, status=404)
+
+    if request.method == 'DELETE':
+        module.delete()
+        return Response({'success': True})
+
+    serializer = ModuleWriteSerializer(module, data=request.data, partial=True)
+    if serializer.is_valid():
+        serializer.save()
+        return Response(ModuleSerializer(module).data)
+    return Response(serializer.errors, status=400)
+
+
+# ── Instructor — lesson CRUD ─────────────────────────────────────────────────
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def module_lessons(request, module_id):
+    """GET/POST /api/v1/lma/modules/{id}/lessons/"""
+    try:
+        module = Module.objects.select_related('course').get(
+            id=module_id, course__instructor=request.user
+        )
+    except Module.DoesNotExist:
+        return Response({'error': 'Module not found.'}, status=404)
+
+    if request.method == 'GET':
+        lessons = Lesson.objects.filter(module=module).order_by('order')
+        return Response(LessonDetailSerializer(lessons, many=True).data)
+
+    serializer = LessonWriteSerializer(data=request.data)
+    if serializer.is_valid():
+        lesson = serializer.save(module=module)
+        return Response(LessonDetailSerializer(lesson).data, status=201)
+    return Response(serializer.errors, status=400)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def lesson_detail_view(request, lesson_id):
+    """GET/PUT/DELETE /api/v1/lma/lessons/{id}/"""
+    try:
+        lesson = Lesson.objects.select_related('module__course').get(
+            id=lesson_id, module__course__instructor=request.user
+        )
+    except Lesson.DoesNotExist:
+        return Response({'error': 'Lesson not found.'}, status=404)
+
+    if request.method == 'GET':
+        return Response(LessonDetailSerializer(lesson).data)
+
+    if request.method == 'DELETE':
+        lesson.delete()
+        return Response({'success': True})
+
+    serializer = LessonWriteSerializer(lesson, data=request.data, partial=True)
+    if serializer.is_valid():
+        serializer.save()
+        return Response(LessonDetailSerializer(lesson).data)
+    return Response(serializer.errors, status=400)
+
+
+# ── Instructor — students / reviews / analytics ──────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def instructor_students(request):
+    """GET /api/v1/lma/instructor/students/"""
+    profile = _get_or_create_lma_profile(request.user)
+    if not profile.can_access_instructor:
+        return Response({'error': 'Instructor access required.'}, status=403)
+
+    course_ids = Course.objects.filter(instructor=request.user).values_list('id', flat=True)
+    enrollments = (
+        Enrollment.objects.filter(course_id__in=course_ids)
+        .select_related('student', 'course')
+        .order_by('-enrolled_at')
+    )
+    data = [{
+        'id': e.id,
+        'student_name': e.student.get_full_name() or e.student.username,
+        'student_email': e.student.email,
+        'course_title': e.course.title,
+        'enrolled_at': e.enrolled_at.isoformat(),
+        'progress': e.progress,
+        'completed': e.completed,
+    } for e in enrollments]
+    return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def instructor_reviews(request):
+    """GET /api/v1/lma/instructor/reviews/"""
+    course_ids = Course.objects.filter(instructor=request.user).values_list('id', flat=True)
+    reviews = (
+        Review.objects.filter(course_id__in=course_ids)
+        .select_related('student', 'course')
+        .order_by('-created_at')
+    )
+    data = [{
+        'id': r.id,
+        'student_name': r.student.get_full_name() or r.student.username,
+        'course_title': r.course.title,
+        'rating': r.rating,
+        'comment': r.comment,
+        'created_at': r.created_at.isoformat(),
+    } for r in reviews]
+    return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def instructor_analytics(request):
+    """GET /api/v1/lma/instructor/analytics/"""
+    from django.db.models import Avg
+
+    courses = Course.objects.filter(instructor=request.user).order_by('-created_at')
+    data = []
+    for c in courses:
+        enrollments = Enrollment.objects.filter(course=c)
+        completed = enrollments.filter(completed=True).count()
+        total = enrollments.count()
+        avg_rating = Review.objects.filter(course=c).aggregate(avg=Avg('rating'))['avg'] or 0
+        data.append({
+            'id': c.id,
+            'title': c.title,
+            'total_students': c.total_students,
+            'completed': completed,
+            'completion_rate': round((completed / max(total, 1)) * 100, 1),
+            'avg_rating': round(float(avg_rating), 1),
+            'revenue': round(float(c.price) * c.total_students, 2),
+            'status': c.status,
+        })
+    return Response(data)
