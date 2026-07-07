@@ -19,6 +19,10 @@ class LessonDetailSerializer(serializers.ModelSerializer):
 
 
 class LessonWriteSerializer(serializers.ModelSerializer):
+    # Use CharField instead of URLField so any URL format is accepted
+    # (short-form youtu.be/... links, relative paths, etc.)
+    video_url = serializers.CharField(allow_blank=True, required=False, default='')
+
     class Meta:
         model = Lesson
         fields = ['title', 'duration', 'order', 'is_free_preview', 'content', 'video_url']
@@ -33,6 +37,9 @@ class ModuleSerializer(serializers.ModelSerializer):
 
 
 class ModuleWriteSerializer(serializers.ModelSerializer):
+    order = serializers.IntegerField(required=False, default=0)
+    duration = serializers.IntegerField(required=False, default=0)
+
     class Meta:
         model = Module
         fields = ['title', 'order', 'duration']
