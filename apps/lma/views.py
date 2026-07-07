@@ -28,8 +28,12 @@ from .serializers import (
 
 User = get_user_model()
 
-INSTRUCTOR_USERNAMES = {'danish', 'tanzeem'}   # lowercase — matched case-insensitively
-INSTRUCTOR_EMAILS    = {'danish@xerxez.com', 'tanzeem@xerxez.com'}
+INSTRUCTOR_USERNAMES = {'danish', 'tanzeem'}   # matched case-insensitively via .lower()
+INSTRUCTOR_EMAILS    = {
+    'danish@xerxez.com',
+    'tanzeem@xerxez.com',
+    'xerxez.in@gmail.com',   # Tanzeem alternate (create_superusers default)
+}
 
 
 import re as _re
@@ -68,15 +72,19 @@ def lma_login(request):
     if not email or not password:
         return Response({'error': 'Email and password are required.'}, status=400)
 
-    # Find user by email or username
+    # Find user by email (case-insensitive) or username
+    email_lower = email.lower()
     user = None
     try:
-        user = User.objects.get(email=email)
+        user = User.objects.get(email__iexact=email_lower)
     except User.DoesNotExist:
         try:
-            user = User.objects.get(username=email)
+            user = User.objects.get(username__iexact=email_lower)
         except User.DoesNotExist:
             pass
+    except User.MultipleObjectsReturned:
+        # Multiple accounts share the same email — match on exact username fallback
+        user = User.objects.filter(email__iexact=email_lower).first()
 
     if not user or not user.check_password(password):
         return Response({'error': 'Invalid credentials.'}, status=401)
