@@ -1,7 +1,8 @@
+from django.db.models import Sum, Avg, Count
 from rest_framework import serializers
 from .models import (
     LMAProfile, Course, Module, Lesson,
-    Enrollment, Assignment, Submission, Certificate, Review,
+    Enrollment, Assignment, Submission, Certificate, Review, LessonProgress,
 )
 
 
@@ -70,7 +71,18 @@ class ModuleWriteSerializer(serializers.ModelSerializer):
 
 
 class CourseListSerializer(serializers.ModelSerializer):
+    """
+    All dynamic stat fields (total_students, lessons, hours, rating,
+    total_ratings, badge) are computed from the real DB at request time.
+    The denormalized columns on Course are intentionally ignored.
+    """
     instructor_name = serializers.SerializerMethodField()
+    total_students  = serializers.SerializerMethodField()
+    lessons         = serializers.SerializerMethodField()
+    hours           = serializers.SerializerMethodField()
+    rating          = serializers.SerializerMethodField()
+    total_ratings   = serializers.SerializerMethodField()
+    badge           = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -84,10 +96,51 @@ class CourseListSerializer(serializers.ModelSerializer):
     def get_instructor_name(self, obj):
         return obj.instructor.get_full_name() or obj.instructor.username
 
+    # ── per-object caches (avoids duplicate queries per field) ────────────
+    def _enrolled(self, obj):
+        if not hasattr(obj, '_enrolled_cache'):
+            obj._enrolled_cache = Enrollment.objects.filter(course=obj).count()
+        return obj._enrolled_cache
 
-class CourseDetailSerializer(serializers.ModelSerializer):
-    modules = ModulePublicSerializer(many=True, read_only=True)
-    instructor_name = serializers.SerializerMethodField()
+    def _lesson_stats(self, obj):
+        if not hasattr(obj, '_lesson_stats_cache'):
+            r = Lesson.objects.filter(module__course=obj).aggregate(
+                count=Count('id'), total_mins=Sum('duration')
+            )
+            obj._lesson_stats_cache = (r['count'] or 0, r['total_mins'] or 0)
+        return obj._lesson_stats_cache
+
+    # ── computed fields ───────────────────────────────────────────────────
+    def get_total_students(self, obj):
+        return self._enrolled(obj)
+
+    def get_lessons(self, obj):
+        count, _ = self._lesson_stats(obj)
+        return count
+
+    def get_hours(self, obj):
+        _, total_mins = self._lesson_stats(obj)
+        return round(total_mins / 60, 1)
+
+    def get_rating(self, obj):
+        avg = Review.objects.filter(course=obj).aggregate(avg=Avg('rating'))['avg']
+        return round(float(avg), 1) if avg else 0.0
+
+    def get_total_ratings(self, obj):
+        return Review.objects.filter(course=obj).count()
+
+    def get_badge(self, obj):
+        if not obj.badge:
+            return ''
+        # Don't show badge (e.g. "Bestseller") when there are no real enrollments
+        if self._enrolled(obj) == 0:
+            return ''
+        return obj.badge
+
+
+class CourseDetailSerializer(CourseListSerializer):
+    modules        = ModulePublicSerializer(many=True, read_only=True)
+    avg_completion = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -96,11 +149,19 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             'badge', 'rating', 'total_ratings', 'total_students',
             'hours', 'lessons', 'tech_stack', 'header_color',
             'instructor_name', 'status', 'created_at', 'updated_at',
-            'modules',
+            'modules', 'avg_completion',
         ]
 
-    def get_instructor_name(self, obj):
-        return obj.instructor.get_full_name() or obj.instructor.username
+    def get_avg_completion(self, obj):
+        enrolled = self._enrolled(obj)
+        if enrolled == 0:
+            return 0
+        lesson_count, _ = self._lesson_stats(obj)
+        if lesson_count == 0:
+            return 0
+        completed = LessonProgress.objects.filter(lesson__module__course=obj).count()
+        total_possible = lesson_count * enrolled
+        return round(completed / total_possible * 100, 1)
 
 
 class EnrollmentSerializer(serializers.ModelSerializer):
