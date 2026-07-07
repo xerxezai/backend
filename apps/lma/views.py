@@ -28,7 +28,8 @@ from .serializers import (
 
 User = get_user_model()
 
-INSTRUCTOR_USERNAMES = {'Danish', 'Tanzeem'}
+INSTRUCTOR_USERNAMES = {'danish', 'tanzeem'}   # lowercase — matched case-insensitively
+INSTRUCTOR_EMAILS    = {'danish@xerxez.com', 'tanzeem@xerxez.com'}
 
 
 import re as _re
@@ -36,7 +37,11 @@ import re as _re
 
 def _get_or_create_lma_profile(user):
     profile, _ = LMAProfile.objects.get_or_create(user=user)
-    if user.username in INSTRUCTOR_USERNAMES:
+    is_instructor = (
+        user.username.lower() in INSTRUCTOR_USERNAMES or
+        user.email.lower() in INSTRUCTOR_EMAILS
+    )
+    if is_instructor:
         profile.lma_role = 'both'
         profile.can_access_student = True
         profile.can_access_instructor = True
