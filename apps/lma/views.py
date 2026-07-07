@@ -280,9 +280,13 @@ def my_certificates(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def instructor_dashboard(request):
-    """GET /api/v1/lma/instructor/dashboard/"""
+    """GET /api/v1/lma/instructor/dashboard/
+    Admin instructors (Danish/Tanzeem) see ALL courses; others see only their own.
+    """
     user = request.user
-    courses = Course.objects.filter(instructor=user).order_by('-created_at')
+    profile = _get_or_create_lma_profile(user)
+    courses = (Course.objects.all() if profile.can_access_instructor
+               else Course.objects.filter(instructor=user)).order_by('-created_at')
     course_ids = courses.values_list('id', flat=True)
 
     pending_submissions = Submission.objects.filter(
@@ -325,10 +329,12 @@ def create_course(request):
 @permission_classes([IsAuthenticated])
 def update_course(request, course_id):
     """PUT /api/v1/lma/courses/{id}/update/"""
+    profile = _get_or_create_lma_profile(request.user)
     try:
-        course = Course.objects.get(id=course_id, instructor=request.user)
+        qs = Course.objects.all() if profile.can_access_instructor else Course.objects.filter(instructor=request.user)
+        course = qs.get(id=course_id)
     except Course.DoesNotExist:
-        return Response({'error': 'Course not found or not yours.'}, status=404)
+        return Response({'error': 'Course not found.'}, status=404)
 
     serializer = CourseCreateSerializer(course, data=request.data, partial=True)
     if serializer.is_valid():
@@ -649,7 +655,8 @@ def instructor_courses(request):
     profile = _get_or_create_lma_profile(request.user)
     if not profile.can_access_instructor:
         return Response({'error': 'Instructor access required.'}, status=403)
-    courses = Course.objects.filter(instructor=request.user).order_by('-created_at')
+    courses = (Course.objects.all() if profile.can_access_instructor
+               else Course.objects.filter(instructor=request.user)).order_by('-created_at')
     return Response(CourseListSerializer(courses, many=True).data)
 
 
@@ -657,10 +664,19 @@ def instructor_courses(request):
 @permission_classes([IsAuthenticated])
 def delete_course(request, course_id):
     """DELETE /api/v1/lma/courses/{id}/delete/"""
+    profile = _get_or_create_lma_profile(request.user)
     try:
-        course = Course.objects.get(id=course_id, instructor=request.user)
+        qs = Course.objects.all() if profile.can_access_instructor else Course.objects.filter(instructor=request.user)
+        course = qs.get(id=course_id)
     except Course.DoesNotExist:
-        return Response({'error': 'Course not found or not yours.'}, status=404)
+        return Response({'error': 'Course not found.'}, status=404)
+
+    enrolled_count = Enrollment.objects.filter(course=course).count()
+    if enrolled_count > 0:
+        return Response(
+            {'error': f'Cannot delete — {enrolled_count} student{"s" if enrolled_count != 1 else ""} enrolled.'},
+            status=400,
+        )
     course.delete()
     return Response({'success': True})
 
@@ -671,10 +687,12 @@ def delete_course(request, course_id):
 @permission_classes([IsAuthenticated])
 def course_modules(request, course_id):
     """GET/POST /api/v1/lma/courses/{id}/modules/"""
+    profile = _get_or_create_lma_profile(request.user)
     try:
-        course = Course.objects.get(id=course_id, instructor=request.user)
+        qs = Course.objects.all() if profile.can_access_instructor else Course.objects.filter(instructor=request.user)
+        course = qs.get(id=course_id)
     except Course.DoesNotExist:
-        return Response({'error': 'Course not found or not yours.'}, status=404)
+        return Response({'error': 'Course not found.'}, status=404)
 
     if request.method == 'GET':
         modules = Module.objects.filter(course=course).prefetch_related('lessons').order_by('order')
@@ -691,10 +709,12 @@ def course_modules(request, course_id):
 @permission_classes([IsAuthenticated])
 def module_detail_view(request, module_id):
     """PUT/DELETE /api/v1/lma/modules/{id}/"""
+    profile = _get_or_create_lma_profile(request.user)
     try:
-        module = Module.objects.select_related('course').get(
-            id=module_id, course__instructor=request.user
-        )
+        qs = Module.objects.select_related('course').all()
+        if not profile.can_access_instructor:
+            qs = qs.filter(course__instructor=request.user)
+        module = qs.get(id=module_id)
     except Module.DoesNotExist:
         return Response({'error': 'Module not found.'}, status=404)
 
@@ -715,10 +735,12 @@ def module_detail_view(request, module_id):
 @permission_classes([IsAuthenticated])
 def module_lessons(request, module_id):
     """GET/POST /api/v1/lma/modules/{id}/lessons/"""
+    profile = _get_or_create_lma_profile(request.user)
     try:
-        module = Module.objects.select_related('course').get(
-            id=module_id, course__instructor=request.user
-        )
+        qs = Module.objects.select_related('course').all()
+        if not profile.can_access_instructor:
+            qs = qs.filter(course__instructor=request.user)
+        module = qs.get(id=module_id)
     except Module.DoesNotExist:
         return Response({'error': 'Module not found.'}, status=404)
 
@@ -737,10 +759,12 @@ def module_lessons(request, module_id):
 @permission_classes([IsAuthenticated])
 def lesson_detail_view(request, lesson_id):
     """GET/PUT/DELETE /api/v1/lma/lessons/{id}/"""
+    profile = _get_or_create_lma_profile(request.user)
     try:
-        lesson = Lesson.objects.select_related('module__course').get(
-            id=lesson_id, module__course__instructor=request.user
-        )
+        qs = Lesson.objects.select_related('module__course').all()
+        if not profile.can_access_instructor:
+            qs = qs.filter(module__course__instructor=request.user)
+        lesson = qs.get(id=lesson_id)
     except Lesson.DoesNotExist:
         return Response({'error': 'Lesson not found.'}, status=404)
 
@@ -768,7 +792,8 @@ def instructor_students(request):
     if not profile.can_access_instructor:
         return Response({'error': 'Instructor access required.'}, status=403)
 
-    course_ids = Course.objects.filter(instructor=request.user).values_list('id', flat=True)
+    course_qs = Course.objects.all() if profile.can_access_instructor else Course.objects.filter(instructor=request.user)
+    course_ids = course_qs.values_list('id', flat=True)
     enrollments = (
         Enrollment.objects.filter(course_id__in=course_ids)
         .select_related('student', 'course')
@@ -790,7 +815,9 @@ def instructor_students(request):
 @permission_classes([IsAuthenticated])
 def instructor_reviews(request):
     """GET /api/v1/lma/instructor/reviews/"""
-    course_ids = Course.objects.filter(instructor=request.user).values_list('id', flat=True)
+    profile = _get_or_create_lma_profile(request.user)
+    course_qs = Course.objects.all() if profile.can_access_instructor else Course.objects.filter(instructor=request.user)
+    course_ids = course_qs.values_list('id', flat=True)
     reviews = (
         Review.objects.filter(course_id__in=course_ids)
         .select_related('student', 'course')
@@ -813,7 +840,9 @@ def instructor_analytics(request):
     """GET /api/v1/lma/instructor/analytics/"""
     from django.db.models import Avg
 
-    courses = Course.objects.filter(instructor=request.user).order_by('-created_at')
+    profile = _get_or_create_lma_profile(request.user)
+    courses = (Course.objects.all() if profile.can_access_instructor
+               else Course.objects.filter(instructor=request.user)).order_by('-created_at')
     data = []
     for c in courses:
         enrollments = Enrollment.objects.filter(course=c)
