@@ -21,6 +21,7 @@ urlpatterns = [
 
     # Lessons
     path('lessons/<int:lesson_id>/', views.lesson_detail_view, name='lma-lesson-detail'),
+    path('lessons/<int:lesson_id>/video/', views.lesson_video_url, name='lma-lesson-video'),
     path('lessons/<int:lesson_id>/complete/', views.lesson_complete, name='lma-lesson-complete'),
 
     # Enrollment

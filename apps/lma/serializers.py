@@ -28,8 +28,32 @@ class LessonWriteSerializer(serializers.ModelSerializer):
         fields = ['title', 'duration', 'order', 'is_free_preview', 'content', 'video_url']
 
 
+class LessonPublicSerializer(serializers.ModelSerializer):
+    """Lesson data for the public course detail endpoint.
+    video_url is NEVER included here — it is served only via the
+    authenticated /lessons/{id}/video/ endpoint after enrollment check."""
+    has_video = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Lesson
+        fields = ['id', 'title', 'duration', 'order', 'is_free_preview', 'content', 'has_video']
+
+    def get_has_video(self, obj):
+        return bool(obj.video_url)
+
+
 class ModuleSerializer(serializers.ModelSerializer):
+    """Full module data including video_url — for instructor-only endpoints."""
     lessons = LessonDetailSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Module
+        fields = ['id', 'title', 'order', 'duration', 'lessons']
+
+
+class ModulePublicSerializer(serializers.ModelSerializer):
+    """Module data for public course detail — video_url stripped from all lessons."""
+    lessons = LessonPublicSerializer(many=True, read_only=True)
 
     class Meta:
         model = Module
@@ -62,7 +86,7 @@ class CourseListSerializer(serializers.ModelSerializer):
 
 
 class CourseDetailSerializer(serializers.ModelSerializer):
-    modules = ModuleSerializer(many=True, read_only=True)
+    modules = ModulePublicSerializer(many=True, read_only=True)
     instructor_name = serializers.SerializerMethodField()
 
     class Meta:

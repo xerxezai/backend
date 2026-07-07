@@ -1,6 +1,8 @@
 """
 LMA (Learning Management Application) Views
 """
+import logging
+
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
@@ -9,6 +11,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import AccessToken
+
+logger = logging.getLogger(__name__)
 
 from .models import (
     LMAProfile, Course, Module, Lesson, Enrollment, Assignment,
@@ -358,6 +362,45 @@ def enrollment_status(request, course_id):
     """GET /api/v1/lma/enrollment-status/{course_id}/"""
     enrolled = Enrollment.objects.filter(student=request.user, course_id=course_id).exists()
     return Response({'enrolled': enrolled})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def lesson_video_url(request, lesson_id):
+    """GET /api/v1/lma/lessons/{lesson_id}/video/
+
+    Returns the video_url for a lesson if the requester is authorized.
+    Free-preview lessons: any request (even unauthenticated) succeeds.
+    All other lessons: requester must be authenticated AND enrolled OR an instructor.
+    """
+    try:
+        lesson = Lesson.objects.select_related('module__course').get(id=lesson_id)
+    except Lesson.DoesNotExist:
+        return Response({'error': 'Lesson not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    course = lesson.module.course
+
+    if lesson.is_free_preview:
+        logger.info('LMA video access (free preview): lesson=%s course=%s user=%s',
+                    lesson.id, course.id,
+                    request.user.id if request.user.is_authenticated else 'anon')
+        return Response({'video_url': lesson.video_url})
+
+    if not request.user.is_authenticated:
+        return Response({'error': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    user = request.user
+    profile = _get_or_create_lma_profile(user)
+    is_instructor = profile.can_access_instructor or course.instructor == user
+    is_enrolled = Enrollment.objects.filter(student=user, course=course).exists()
+
+    if not (is_enrolled or is_instructor):
+        return Response({'error': 'Enrollment required to watch this lesson.'},
+                        status=status.HTTP_403_FORBIDDEN)
+
+    logger.info('LMA video access: user=%s lesson=%s course=%s instructor=%s',
+                user.id, lesson.id, course.id, is_instructor)
+    return Response({'video_url': lesson.video_url})
 
 
 @api_view(['POST'])
