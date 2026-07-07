@@ -44,6 +44,8 @@ urlpatterns = [
     path('instructor/dashboard/', views.instructor_dashboard, name='lma-instructor-dashboard'),
     path('instructor/courses/', views.instructor_courses, name='lma-instructor-courses'),
     path('instructor/students/', views.instructor_students, name='lma-instructor-students'),
+    path('instructor/students/<int:student_id>/details/', views.student_detail, name='lma-student-detail'),
+    path('instructor/enrollments/<int:enrollment_id>/', views.unenroll_student, name='lma-unenroll-student'),
     path('instructor/reviews/', views.instructor_reviews, name='lma-instructor-reviews'),
     path('instructor/analytics/', views.instructor_analytics, name='lma-instructor-analytics'),
 

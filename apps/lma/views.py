@@ -5,6 +5,7 @@ import logging
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -809,14 +810,142 @@ def instructor_students(request):
     )
     data = [{
         'id': e.id,
+        'student_id': e.student.id,
         'student_name': e.student.get_full_name() or e.student.username,
         'student_email': e.student.email,
+        'course_id': e.course.id,
         'course_title': e.course.title,
         'enrolled_at': e.enrolled_at.isoformat(),
         'progress': e.progress,
         'completed': e.completed,
     } for e in enrollments]
     return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_detail(request, student_id):
+    """GET /api/v1/lma/instructor/students/{student_id}/details/"""
+    profile = _get_or_create_lma_profile(request.user)
+    if not profile.can_access_instructor:
+        return Response({'error': 'Instructor access required.'}, status=403)
+
+    user = get_object_or_404(User, id=student_id)
+
+    enrollments = (
+        Enrollment.objects.filter(student=user)
+        .select_related('course')
+        .order_by('-enrolled_at')
+    )
+
+    enrollments_data = []
+    for enr in enrollments:
+        total_lessons = Lesson.objects.filter(module__course=enr.course).count()
+        completed_lessons = LessonProgress.objects.filter(
+            student=user, lesson__module__course=enr.course
+        ).count()
+        enrollments_data.append({
+            'enrollment_id': enr.id,
+            'course_id': enr.course.id,
+            'course_title': enr.course.title,
+            'enrolled_at': enr.enrolled_at.isoformat(),
+            'progress': enr.progress,
+            'completed': enr.completed,
+            'completed_at': enr.completed_at.isoformat() if enr.completed_at else None,
+            'total_lessons': total_lessons,
+            'completed_lessons': completed_lessons,
+        })
+
+    submissions = (
+        Submission.objects.filter(student=user)
+        .select_related('assignment', 'assignment__course')
+        .order_by('-submitted_at')
+    )
+
+    submissions_data = [{
+        'id': s.id,
+        'assignment_title': s.assignment.title,
+        'course_title': s.assignment.course.title,
+        'submitted_at': s.submitted_at.isoformat(),
+        'grade': s.grade,
+        'feedback': s.feedback,
+        'graded_at': s.graded_at.isoformat() if s.graded_at else None,
+    } for s in submissions]
+
+    activity: list[dict] = []
+    for enr in enrollments:
+        activity.append({
+            'type': 'enrolled',
+            'timestamp': enr.enrolled_at.isoformat(),
+            'description': f'Enrolled in {enr.course.title}',
+        })
+        if enr.completed and enr.completed_at:
+            activity.append({
+                'type': 'completed_course',
+                'timestamp': enr.completed_at.isoformat(),
+                'description': f'Completed {enr.course.title}',
+            })
+
+    lesson_completions = (
+        LessonProgress.objects.filter(student=user)
+        .select_related('lesson__module__course')
+        .order_by('-completed_at')[:20]
+    )
+    for lp in lesson_completions:
+        activity.append({
+            'type': 'completed_lesson',
+            'timestamp': lp.completed_at.isoformat(),
+            'description': f'Completed "{lp.lesson.title}" in {lp.lesson.module.course.title}',
+        })
+
+    for s in submissions:
+        activity.append({
+            'type': 'submitted_assignment',
+            'timestamp': s.submitted_at.isoformat(),
+            'description': f'Submitted "{s.assignment.title}" for {s.assignment.course.title}',
+        })
+
+    for cert in Certificate.objects.filter(student=user).select_related('course'):
+        activity.append({
+            'type': 'earned_certificate',
+            'timestamp': cert.issued_at.isoformat(),
+            'description': f'Earned certificate for {cert.course.title}',
+        })
+
+    activity.sort(key=lambda x: x['timestamp'], reverse=True)
+
+    return Response({
+        'id': user.id,
+        'name': user.get_full_name() or user.username,
+        'email': user.email,
+        'username': user.username,
+        'date_joined': user.date_joined.isoformat(),
+        'enrollments': enrollments_data,
+        'submissions': submissions_data,
+        'activity': activity[:30],
+    })
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def unenroll_student(request, enrollment_id):
+    """DELETE /api/v1/lma/instructor/enrollments/{enrollment_id}/"""
+    profile = _get_or_create_lma_profile(request.user)
+    if not profile.can_access_instructor:
+        return Response({'error': 'Instructor access required.'}, status=403)
+
+    enrollment = get_object_or_404(Enrollment, id=enrollment_id)
+    course = enrollment.course
+    student = enrollment.student
+
+    LessonProgress.objects.filter(student=student, lesson__module__course=course).delete()
+    enrollment.delete()
+
+    if course.total_students > 0:
+        course.total_students = max(0, course.total_students - 1)
+        course.save(update_fields=['total_students'])
+
+    return Response({'success': True})
 
 
 @api_view(['GET'])
