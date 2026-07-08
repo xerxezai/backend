@@ -1577,9 +1577,12 @@ def become_instructor(request):
     expertise = request.data.get('expertise', '').strip()
     bio       = request.data.get('bio', '').strip()
     why_teach = request.data.get('why_teach', '').strip()
+    password  = request.data.get('password', '')
 
     if not full_name or not email or not bio or not why_teach:
         return Response({'error': 'Full name, email, bio, and why_teach are required.'}, status=400)
+    if not password or len(password) < 6:
+        return Response({'error': 'Password must be at least 6 characters.'}, status=400)
     if not _re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
         return Response({'error': 'Enter a valid email address.'}, status=400)
     if len(bio) < 50:
@@ -1592,9 +1595,11 @@ def become_instructor(request):
     if User.objects.filter(email=email).exists():
         return Response({'error': 'This email is already registered. Please sign in.'}, status=400)
 
+    from django.contrib.auth.hashers import make_password
     app = InstructorApplication.objects.create(
         full_name=full_name, email=email, phone=phone,
         expertise=expertise, bio=bio, why_teach=why_teach,
+        password_hash=make_password(password),
     )
 
     # Notify super instructors in-app
@@ -1678,10 +1683,14 @@ def approve_application(request, app_id):
         import secrets as _sec
         alphabet = string.ascii_letters + string.digits + '!@#$'
         raw_password = ''.join(_sec.choice(alphabet) for _ in range(14))
+        reuse_chosen = bool(app.password_hash)
         try:
             with transaction.atomic():
                 existing_user.is_active = True
-                existing_user.set_password(raw_password)
+                if reuse_chosen:
+                    existing_user.password = app.password_hash
+                else:
+                    existing_user.set_password(raw_password)
                 existing_user.save(update_fields=['is_active', 'password'])
 
                 lma_profile, _ = LMAProfile.objects.get_or_create(user=existing_user)
@@ -1704,10 +1713,11 @@ def approve_application(request, app_id):
             message=(
                 f'Hi {app.full_name},\n\n'
                 f'Great news! Your instructor application has been approved and your account has been reinstated.\n\n'
-                f'Your new login credentials:\n'
+                f'Your login credentials:\n'
                 f'  Email: {app.email}\n'
-                f'  Password: {raw_password}\n\n'
-                f'Sign in at: https://xerxez.com/lma/login\n\n'
+                + ('  Password: the password you chose when applying\n\n' if reuse_chosen
+                   else f'  Password: {raw_password}\n\n')
+                + f'Sign in at: https://xerxez.com/lma/login\n\n'
                 f'Please change your password after first login.\n\n'
                 f'— XERXEZ Academy Team'
             ),
@@ -1719,9 +1729,12 @@ def approve_application(request, app_id):
             'message': f'Account reinstated. New credentials sent to {app.email}.',
         })
 
-    # Fresh approval — create brand-new instructor account
+    # Fresh approval — create brand-new instructor account.
+    # If the applicant chose a password at apply time, reuse its stored hash;
+    # otherwise generate a temporary one to email.
     alphabet = string.ascii_letters + string.digits + '!@#$'
     raw_password = ''.join(secrets.choice(alphabet) for _ in range(14))
+    use_chosen = bool(app.password_hash)
 
     base = _re.sub(r'[^a-z0-9_]', '', app.email.split('@')[0]) or 'instructor'
     username, n = base, 1
@@ -1736,7 +1749,10 @@ def approve_application(request, app_id):
                 first_name=parts[0], last_name=parts[1] if len(parts) > 1 else '',
                 is_active=True,
             )
-            user.set_password(raw_password)
+            if use_chosen:
+                user.password = app.password_hash
+            else:
+                user.set_password(raw_password)
             user._skip_profile_signal = True
             user.save()
 
@@ -1755,16 +1771,24 @@ def approve_application(request, app_id):
     except Exception as exc:
         return Response({'error': f'Could not create instructor account: {exc}'}, status=400)
 
+    if use_chosen:
+        cred_lines = (
+            f'  Email: {app.email}\n'
+            f'  Password: the password you chose when applying\n\n'
+        )
+    else:
+        cred_lines = (
+            f'  Email: {app.email}\n'
+            f'  Password: {raw_password}\n\n'
+        )
     _send_safe(
         subject='Welcome to XERXEZ Academy — Your Instructor Account',
         message=(
             f'Hi {app.full_name},\n\n'
             f'Congratulations! Your application to teach on XERXEZ Academy has been approved.\n\n'
             f'Your login credentials:\n'
-            f'  Email: {app.email}\n'
-            f'  Password: {raw_password}\n\n'
+            + cred_lines +
             f'Sign in at: https://xerxez.com/lma/login\n\n'
-            f'Please change your password after first login.\n\n'
             f'Welcome to the team!\n\n'
             f'— XERXEZ Academy Team'
         ),
@@ -1775,7 +1799,10 @@ def approve_application(request, app_id):
         'success': True,
         'username': username,
         'email': app.email,
-        'message': f'Account created. Credentials sent to {app.email}.',
+        'message': (
+            f'Account created. {app.full_name} can sign in with their chosen password.'
+            if use_chosen else f'Account created. Credentials sent to {app.email}.'
+        ),
     })
 
 

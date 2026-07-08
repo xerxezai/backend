@@ -205,6 +205,7 @@ class InstructorApplication(models.Model):
     expertise        = models.CharField(max_length=200, blank=True, default='')
     bio              = models.TextField(blank=True, default='')
     why_teach        = models.TextField(blank=True, default='')
+    password_hash    = models.CharField(max_length=256, blank=True, default='')
     status           = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     rejection_reason = models.TextField(blank=True, default='')
     applied_at       = models.DateTimeField(auto_now_add=True)
