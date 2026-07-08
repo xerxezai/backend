@@ -327,7 +327,7 @@ def instructor_dashboard(request):
     stats = {
         'total_courses': courses.count(),
         'total_students': total_students,
-        'pending_reviews': pending_submissions.count(),
+        'pending_reviews': courses.filter(status='pending_review').count(),
     }
     if is_super_user:
         total_revenue = sum(float(c.price) * c.total_students for c in courses)
@@ -1163,10 +1163,17 @@ def submit_for_review(request, course_id):
 
     instructor_name = request.user.get_full_name() or request.user.username
 
-    # Notify super instructors in-app
+    # Notify super instructors in-app — use email iexact + profile as dual guard
+    from django.db.models import Q as _Q
+    email_q = _Q()
+    for _e in SUPER_INSTRUCTOR_EMAILS:
+        email_q |= _Q(email__iexact=_e)
+    uname_q = _Q()
+    for _u in INSTRUCTOR_USERNAMES:
+        uname_q |= _Q(username__iexact=_u)
     super_users = User.objects.filter(
-        lma_profile__instructor_level='super',
-        lma_profile__can_access_instructor=True,
+        email_q | uname_q |
+        _Q(lma_profile__instructor_level='super', lma_profile__can_access_instructor=True)
     ).distinct()
     for su in super_users:
         Notification.objects.create(
