@@ -20,11 +20,13 @@ from .serializers import (
     LoginSerializer,
     RegisterSerializer,
     UserSerializer,
+    AvatarUploadSerializer,
     PasswordChangeSerializer,
     ForgotPasswordSerializer,
     VerifyOTPSerializer,
     ResetPasswordSerializer,
 )
+from rest_framework.parsers import MultiPartParser, FormParser
 
 
 def _user_payload(user):
@@ -117,6 +119,16 @@ class ProfileView(generics.RetrieveUpdateAPIView):
     """GET/PATCH /api/v1/auth/profile/"""
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+
+class AvatarUploadView(generics.UpdateAPIView):
+    """PATCH /api/v1/auth/profile/avatar/ — multipart avatar upload."""
+    serializer_class = AvatarUploadSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
 
     def get_object(self):
         return self.request.user

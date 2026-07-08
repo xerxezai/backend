@@ -51,13 +51,14 @@ class RegisterSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
     name = serializers.SerializerMethodField()
+    avatar_url = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = (
             'id', 'username', 'email', 'first_name', 'last_name',
             'role', 'name', 'date_joined', 'is_active',
-            'phone', 'bio', 'department',
+            'phone', 'bio', 'department', 'avatar_url',
         )
         read_only_fields = ('id', 'date_joined')
 
@@ -69,6 +70,29 @@ class UserSerializer(serializers.ModelSerializer):
 
     def get_name(self, obj):
         return obj.first_name or obj.username
+
+    def get_avatar_url(self, obj):
+        if not obj.avatar:
+            return None
+        request = self.context.get('request')
+        url = obj.avatar.url
+        return request.build_absolute_uri(url) if request else url
+
+
+class AvatarUploadSerializer(serializers.ModelSerializer):
+    avatar_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ('avatar', 'avatar_url')
+        extra_kwargs = {'avatar': {'write_only': True}}
+
+    def get_avatar_url(self, obj):
+        if not obj.avatar:
+            return None
+        request = self.context.get('request')
+        url = obj.avatar.url
+        return request.build_absolute_uri(url) if request else url
 
 
 class PasswordChangeSerializer(serializers.Serializer):

@@ -9,6 +9,7 @@ class User(AbstractUser):
     phone = models.CharField(max_length=30, blank=True, default='')
     bio = models.TextField(blank=True, default='')
     department = models.CharField(max_length=100, blank=True, default='')
+    avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
 
     def __str__(self):
         return self.username
