@@ -1483,14 +1483,59 @@ def approve_application(request, app_id):
     except InstructorApplication.DoesNotExist:
         return Response({'error': 'Application not found.'}, status=404)
 
-    if app.status != 'pending':
-        return Response({'error': f'Application is already {app.status}.'}, status=400)
-
-    if User.objects.filter(email=app.email).exists():
-        return Response({'error': 'A user with this email already exists.'}, status=400)
-
     import secrets
     import string
+
+    existing_user = User.objects.filter(email=app.email).first()
+
+    if existing_user:
+        # Re-approving a previously rejected application whose account already exists —
+        # re-activate the account, restore instructor profile, and send a new temp password.
+        import secrets as _sec
+        alphabet = string.ascii_letters + string.digits + '!@#$'
+        raw_password = ''.join(_sec.choice(alphabet) for _ in range(14))
+        try:
+            with transaction.atomic():
+                existing_user.is_active = True
+                existing_user.set_password(raw_password)
+                existing_user.save(update_fields=['is_active', 'password'])
+
+                lma_profile, _ = LMAProfile.objects.get_or_create(user=existing_user)
+                lma_profile.lma_role = 'instructor'
+                lma_profile.can_access_student = False
+                lma_profile.can_access_instructor = True
+                lma_profile.instructor_level = 'regular'
+                lma_profile.save()
+
+                app.status = 'approved'
+                app.rejection_reason = ''
+                app.reviewed_at = timezone.now()
+                app.reviewed_by = request.user
+                app.save(update_fields=['status', 'rejection_reason', 'reviewed_at', 'reviewed_by'])
+        except Exception as exc:
+            return Response({'error': f'Could not restore instructor account: {exc}'}, status=400)
+
+        _send_safe(
+            subject='XERXEZ Academy — Your Instructor Access Has Been Reinstated',
+            message=(
+                f'Hi {app.full_name},\n\n'
+                f'Great news! Your instructor application has been approved and your account has been reinstated.\n\n'
+                f'Your new login credentials:\n'
+                f'  Email: {app.email}\n'
+                f'  Password: {raw_password}\n\n'
+                f'Sign in at: https://xerxez.com/lma/login\n\n'
+                f'Please change your password after first login.\n\n'
+                f'— XERXEZ Academy Team'
+            ),
+            recipient_list=[app.email],
+        )
+        return Response({
+            'success': True,
+            'email': app.email,
+            'message': f'Account reinstated. New credentials sent to {app.email}.',
+        })
+
+    # Fresh approval — create brand-new instructor account
     alphabet = string.ascii_letters + string.digits + '!@#$'
     raw_password = ''.join(secrets.choice(alphabet) for _ in range(14))
 
@@ -1526,7 +1571,6 @@ def approve_application(request, app_id):
     except Exception as exc:
         return Response({'error': f'Could not create instructor account: {exc}'}, status=400)
 
-    # Send welcome email with credentials
     _send_safe(
         subject='Welcome to XERXEZ Academy — Your Instructor Account',
         message=(
@@ -1564,12 +1608,24 @@ def reject_application(request, app_id):
     except InstructorApplication.DoesNotExist:
         return Response({'error': 'Application not found.'}, status=404)
 
-    if app.status != 'pending':
-        return Response({'error': f'Application is already {app.status}.'}, status=400)
-
     reason = request.data.get('reason', '').strip()
     if not reason:
         return Response({'error': 'A rejection reason is required.'}, status=400)
+
+    # If revoking an approved application, deactivate the instructor account
+    if app.status == 'approved':
+        revoked_user = User.objects.filter(email=app.email).first()
+        if revoked_user:
+            try:
+                with transaction.atomic():
+                    revoked_user.is_active = False
+                    revoked_user.save(update_fields=['is_active'])
+                    lma_p = getattr(revoked_user, 'lma_profile', None)
+                    if lma_p:
+                        lma_p.can_access_instructor = False
+                        lma_p.save(update_fields=['can_access_instructor'])
+            except Exception:
+                pass  # non-fatal
 
     app.status = 'rejected'
     app.rejection_reason = reason
