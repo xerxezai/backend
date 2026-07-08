@@ -1279,21 +1279,37 @@ def reset_instructor_password(request, instructor_id):
     except User.DoesNotExist:
         return Response({'error': 'Instructor not found.'}, status=404)
 
-    import secrets as _sec
-    import string as _str
-    alphabet = _str.ascii_letters + _str.digits + '!@#$'
-    new_password = ''.join(_sec.choice(alphabet) for _ in range(12))
+    custom_password = request.data.get('password', '').strip()
+
+    if custom_password:
+        if len(custom_password) < 6:
+            return Response({'error': 'Password must be at least 6 characters.'}, status=400)
+        new_password = custom_password
+    else:
+        import secrets as _sec
+        import string as _str
+        alphabet = _str.ascii_letters + _str.digits + '!@#$'
+        new_password = ''.join(_sec.choice(alphabet) for _ in range(12))
 
     target_user.set_password(new_password)
     target_user.save(update_fields=['password'])
 
     full_name = target_user.get_full_name() or target_user.username
+    admin_name = request.user.get_full_name() or request.user.username
+
+    # In-app bell notification for the instructor
+    Notification.objects.create(
+        recipient=target_user,
+        title='Your Password Has Been Reset',
+        message=f'{admin_name} has reset your account password. Check your email for the new credentials.',
+    )
+
     _send_safe(
         subject='XERXEZ Academy — Your Password Has Been Reset',
         message=(
             f'Hi {full_name},\n\n'
             f'An administrator has reset your XERXEZ Academy instructor account password.\n\n'
-            f'Your new temporary password:\n'
+            f'Your new password:\n'
             f'  {new_password}\n\n'
             f'Sign in at: https://xerxez.com/lma/login\n\n'
             f'Please change your password after logging in.\n\n'
