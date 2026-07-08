@@ -1165,7 +1165,8 @@ def submit_for_review(request, course_id):
 
     # Notify super instructors in-app
     super_users = User.objects.filter(
-        Q(username__in=INSTRUCTOR_USERNAMES) | Q(email__in=INSTRUCTOR_EMAILS)
+        lma_profile__instructor_level='super',
+        lma_profile__can_access_instructor=True,
     ).distinct()
     for su in super_users:
         Notification.objects.create(
