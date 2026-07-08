@@ -1579,12 +1579,14 @@ def become_instructor(request):
     why_teach = request.data.get('why_teach', '').strip()
     password  = request.data.get('password', '')
 
-    if not full_name or not email or not bio or not why_teach:
-        return Response({'error': 'Full name, email, bio, and why_teach are required.'}, status=400)
+    if not full_name or not email or not phone or not bio or not why_teach:
+        return Response({'error': 'Full name, email, phone, bio, and why_teach are required.'}, status=400)
     if not password or len(password) < 6:
         return Response({'error': 'Password must be at least 6 characters.'}, status=400)
     if not _re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
         return Response({'error': 'Enter a valid email address.'}, status=400)
+    if len(_re.sub(r'\D', '', phone)) < 10:
+        return Response({'error': 'Please enter a valid phone number (min 10 digits).'}, status=400)
     if len(bio) < 30:
         return Response({'error': 'Bio must be at least 30 characters.'}, status=400)
     if len(why_teach) < 50:
