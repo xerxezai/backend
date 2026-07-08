@@ -172,6 +172,10 @@ class Review(models.Model):
     rating = models.IntegerField()
     comment = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['student', 'course']
 
     def __str__(self):
         return f"{self.student.username} - {self.course.title} ({self.rating}★)"

@@ -17,6 +17,9 @@ urlpatterns = [
     path('courses/<int:course_id>/submit-for-review/', views.submit_for_review, name='lma-submit-for-review'),
     path('courses/<int:course_id>/publish/', views.publish_course, name='lma-publish-course'),
     path('courses/<int:course_id>/reject/', views.reject_course, name='lma-reject-course'),
+    path('courses/<int:course_id>/review/', views.submit_review, name='lma-submit-review'),
+    path('courses/<int:course_id>/my-review/', views.my_review_for_course, name='lma-my-review'),
+    path('courses/<int:course_id>/reviews/', views.course_reviews, name='lma-course-reviews'),
 
     # Modules
     path('modules/<int:module_id>/', views.module_detail_view, name='lma-module-detail'),

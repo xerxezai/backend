@@ -1019,6 +1019,88 @@ def instructor_reviews(request):
     return Response(data)
 
 
+def _recompute_course_rating(course):
+    from django.db.models import Avg, Count
+    agg = Review.objects.filter(course=course).aggregate(avg=Avg('rating'), count=Count('id'))
+    course.rating = round(agg['avg'] or 0, 1)
+    course.total_ratings = agg['count'] or 0
+    course.save(update_fields=['rating', 'total_ratings'])
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def submit_review(request, course_id):
+    """POST /api/v1/lma/courses/{course_id}/review/ — enrolled students only.
+    Any enrolled student may leave a review at any point (no completion gate).
+    Resubmitting updates the student's existing review for the course."""
+    try:
+        course = Course.objects.get(id=course_id)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found.'}, status=404)
+
+    if not Enrollment.objects.filter(student=request.user, course=course).exists():
+        return Response({'error': 'You must be enrolled in this course to leave a review.'}, status=403)
+
+    rating = request.data.get('rating')
+    comment = request.data.get('comment', '').strip()
+
+    try:
+        rating = int(rating)
+    except (TypeError, ValueError):
+        return Response({'error': 'Rating is required and must be a number.'}, status=400)
+    if rating < 1 or rating > 5:
+        return Response({'error': 'Rating must be between 1 and 5.'}, status=400)
+
+    review, _created = Review.objects.update_or_create(
+        student=request.user, course=course,
+        defaults={'rating': rating, 'comment': comment},
+    )
+    _recompute_course_rating(course)
+
+    return Response({
+        'id': review.id,
+        'rating': review.rating,
+        'comment': review.comment,
+        'created_at': review.created_at.isoformat(),
+        'course_rating': float(course.rating),
+        'course_total_ratings': course.total_ratings,
+    }, status=201 if _created else 200)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def course_reviews(request, course_id):
+    """GET /api/v1/lma/courses/{course_id}/reviews/ — public list of reviews for a course."""
+    reviews = (
+        Review.objects.filter(course_id=course_id)
+        .select_related('student')
+        .order_by('-created_at')
+    )
+    data = [{
+        'id': r.id,
+        'student_name': r.student.get_full_name() or r.student.username,
+        'rating': r.rating,
+        'comment': r.comment,
+        'created_at': r.created_at.isoformat(),
+    } for r in reviews]
+    return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_review_for_course(request, course_id):
+    """GET /api/v1/lma/courses/{course_id}/review/ — the current student's own review, if any."""
+    review = Review.objects.filter(student=request.user, course_id=course_id).first()
+    if not review:
+        return Response(None)
+    return Response({
+        'id': review.id,
+        'rating': review.rating,
+        'comment': review.comment,
+        'created_at': review.created_at.isoformat(),
+    })
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def instructor_analytics(request):
