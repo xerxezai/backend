@@ -1585,10 +1585,10 @@ def become_instructor(request):
         return Response({'error': 'Password must be at least 6 characters.'}, status=400)
     if not _re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
         return Response({'error': 'Enter a valid email address.'}, status=400)
-    if len(bio) < 50:
-        return Response({'error': 'Bio must be at least 50 characters.'}, status=400)
-    if len(why_teach) < 100:
-        return Response({'error': 'Why-teach must be at least 100 characters.'}, status=400)
+    if len(bio) < 30:
+        return Response({'error': 'Bio must be at least 30 characters.'}, status=400)
+    if len(why_teach) < 50:
+        return Response({'error': 'Why-teach must be at least 50 characters.'}, status=400)
 
     if InstructorApplication.objects.filter(email=email).exists():
         return Response({'error': 'An application with this email already exists.'}, status=400)
