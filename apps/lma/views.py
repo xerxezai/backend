@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 from .models import (
     LMAProfile, Course, Module, Lesson, Enrollment, Assignment,
     Submission, Certificate, Review, LessonProgress, Notification,
+    InstructorApplication,
 )
 from .serializers import (
     CourseListSerializer, CourseDetailSerializer, EnrollmentSerializer,
@@ -1363,3 +1364,230 @@ def pending_review_queue(request):
         'updated_at': c.updated_at.isoformat(),
     } for c in courses]
     return Response(data)
+
+
+# ── Instructor Applications ──────────────────────────────────────────────────
+
+def _get_super_users():
+    """Return all super-instructor User objects via email/username/profile."""
+    from django.db.models import Q as _Q
+    email_q = _Q()
+    for _e in SUPER_INSTRUCTOR_EMAILS:
+        email_q |= _Q(email__iexact=_e)
+    uname_q = _Q()
+    for _u in INSTRUCTOR_USERNAMES:
+        uname_q |= _Q(username__iexact=_u)
+    return User.objects.filter(
+        email_q | uname_q |
+        _Q(lma_profile__instructor_level='super', lma_profile__can_access_instructor=True)
+    ).distinct()
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def become_instructor(request):
+    """POST /api/v1/lma/become-instructor/ — public, no auth required."""
+    full_name = request.data.get('full_name', '').strip()
+    email     = request.data.get('email', '').strip().lower()
+    phone     = request.data.get('phone', '').strip()
+    expertise = request.data.get('expertise', '').strip()
+    bio       = request.data.get('bio', '').strip()
+    why_teach = request.data.get('why_teach', '').strip()
+
+    if not full_name or not email or not bio or not why_teach:
+        return Response({'error': 'Full name, email, bio, and why_teach are required.'}, status=400)
+    if not _re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
+        return Response({'error': 'Enter a valid email address.'}, status=400)
+    if len(bio) < 50:
+        return Response({'error': 'Bio must be at least 50 characters.'}, status=400)
+    if len(why_teach) < 100:
+        return Response({'error': 'Why-teach must be at least 100 characters.'}, status=400)
+
+    if InstructorApplication.objects.filter(email=email).exists():
+        return Response({'error': 'An application with this email already exists.'}, status=400)
+    if User.objects.filter(email=email).exists():
+        return Response({'error': 'This email is already registered. Please sign in.'}, status=400)
+
+    app = InstructorApplication.objects.create(
+        full_name=full_name, email=email, phone=phone,
+        expertise=expertise, bio=bio, why_teach=why_teach,
+    )
+
+    # Notify super instructors in-app
+    for su in _get_super_users():
+        Notification.objects.create(
+            recipient=su,
+            title='New Instructor Application',
+            message=f'{full_name} ({email}) has applied to become an instructor.',
+        )
+
+    # Email super instructors
+    _send_safe(
+        subject=f'[Xerxez LMA] New Instructor Application from {full_name}',
+        message=(
+            f'Hello,\n\n'
+            f'{full_name} ({email}) has submitted an instructor application.\n\n'
+            f'Expertise: {expertise or "Not specified"}\n\n'
+            f'Bio:\n{bio}\n\n'
+            f'Why teach:\n{why_teach}\n\n'
+            f'Log in to the instructor dashboard → Applications to review.\n\n'
+            f'— Xerxez LMA'
+        ),
+        recipient_list=SUPER_INSTRUCTOR_EMAILS,
+    )
+
+    return Response({'success': True, 'application_id': app.id}, status=201)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_applications(request):
+    """GET /api/v1/lma/instructor/applications/?status=pending"""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    status_filter = request.query_params.get('status', '')
+    qs = InstructorApplication.objects.all()
+    if status_filter in ('pending', 'approved', 'rejected'):
+        qs = qs.filter(status=status_filter)
+
+    pending_count = InstructorApplication.objects.filter(status='pending').count()
+    data = [{
+        'id': a.id,
+        'full_name': a.full_name,
+        'email': a.email,
+        'phone': a.phone,
+        'expertise': a.expertise,
+        'bio': a.bio,
+        'why_teach': a.why_teach,
+        'status': a.status,
+        'rejection_reason': a.rejection_reason,
+        'applied_at': a.applied_at.isoformat(),
+        'reviewed_at': a.reviewed_at.isoformat() if a.reviewed_at else None,
+        'reviewed_by': a.reviewed_by.get_full_name() or a.reviewed_by.username if a.reviewed_by else None,
+    } for a in qs]
+    return Response({'applications': data, 'pending_count': pending_count})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def approve_application(request, app_id):
+    """POST /api/v1/lma/instructor/applications/{id}/approve/ — super only."""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    try:
+        app = InstructorApplication.objects.get(id=app_id)
+    except InstructorApplication.DoesNotExist:
+        return Response({'error': 'Application not found.'}, status=404)
+
+    if app.status != 'pending':
+        return Response({'error': f'Application is already {app.status}.'}, status=400)
+
+    if User.objects.filter(email=app.email).exists():
+        return Response({'error': 'A user with this email already exists.'}, status=400)
+
+    import secrets
+    import string
+    alphabet = string.ascii_letters + string.digits + '!@#$'
+    raw_password = ''.join(secrets.choice(alphabet) for _ in range(14))
+
+    base = _re.sub(r'[^a-z0-9_]', '', app.email.split('@')[0]) or 'instructor'
+    username, n = base, 1
+    while User.objects.filter(username=username).exists():
+        username = f"{base}{n}"; n += 1
+
+    parts = app.full_name.split(' ', 1)
+    try:
+        with transaction.atomic():
+            user = User(
+                username=username, email=app.email,
+                first_name=parts[0], last_name=parts[1] if len(parts) > 1 else '',
+                is_active=True,
+            )
+            user.set_password(raw_password)
+            user._skip_profile_signal = True
+            user.save()
+
+            lma_profile, _ = LMAProfile.objects.get_or_create(user=user)
+            lma_profile.lma_role = 'instructor'
+            lma_profile.can_access_student = False
+            lma_profile.can_access_instructor = True
+            lma_profile.instructor_level = 'regular'
+            lma_profile.bio = app.bio
+            lma_profile.save()
+
+            app.status = 'approved'
+            app.reviewed_at = timezone.now()
+            app.reviewed_by = request.user
+            app.save(update_fields=['status', 'reviewed_at', 'reviewed_by'])
+    except Exception as exc:
+        return Response({'error': f'Could not create instructor account: {exc}'}, status=400)
+
+    # Send welcome email with credentials
+    _send_safe(
+        subject='Welcome to XERXEZ Academy — Your Instructor Account',
+        message=(
+            f'Hi {app.full_name},\n\n'
+            f'Congratulations! Your application to teach on XERXEZ Academy has been approved.\n\n'
+            f'Your login credentials:\n'
+            f'  Email: {app.email}\n'
+            f'  Password: {raw_password}\n\n'
+            f'Sign in at: https://xerxez.com/lma/login\n\n'
+            f'Please change your password after first login.\n\n'
+            f'Welcome to the team!\n\n'
+            f'— XERXEZ Academy Team'
+        ),
+        recipient_list=[app.email],
+    )
+
+    return Response({
+        'success': True,
+        'username': username,
+        'email': app.email,
+        'message': f'Account created. Credentials sent to {app.email}.',
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reject_application(request, app_id):
+    """POST /api/v1/lma/instructor/applications/{id}/reject/ — super only."""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    try:
+        app = InstructorApplication.objects.get(id=app_id)
+    except InstructorApplication.DoesNotExist:
+        return Response({'error': 'Application not found.'}, status=404)
+
+    if app.status != 'pending':
+        return Response({'error': f'Application is already {app.status}.'}, status=400)
+
+    reason = request.data.get('reason', '').strip()
+    if not reason:
+        return Response({'error': 'A rejection reason is required.'}, status=400)
+
+    app.status = 'rejected'
+    app.rejection_reason = reason
+    app.reviewed_at = timezone.now()
+    app.reviewed_by = request.user
+    app.save(update_fields=['status', 'rejection_reason', 'reviewed_at', 'reviewed_by'])
+
+    _send_safe(
+        subject='Your XERXEZ Academy Instructor Application',
+        message=(
+            f'Hi {app.full_name},\n\n'
+            f'Thank you for applying to teach on XERXEZ Academy.\n\n'
+            f'After careful review, we are unable to approve your application at this time.\n\n'
+            f'Feedback from our team:\n{reason}\n\n'
+            f'You are welcome to apply again in the future.\n\n'
+            f'— XERXEZ Academy Team'
+        ),
+        recipient_list=[app.email],
+    )
+
+    return Response({'success': True})

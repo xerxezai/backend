@@ -192,6 +192,37 @@ class LessonProgress(models.Model):
         return f"{self.student.username} ✓ {self.lesson.title}"
 
 
+class InstructorApplication(models.Model):
+    STATUS_CHOICES = [
+        ('pending',  'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    full_name        = models.CharField(max_length=200)
+    email            = models.EmailField(unique=True)
+    phone            = models.CharField(max_length=30, blank=True, default='')
+    expertise        = models.CharField(max_length=200, blank=True, default='')
+    bio              = models.TextField(blank=True, default='')
+    why_teach        = models.TextField(blank=True, default='')
+    status           = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    rejection_reason = models.TextField(blank=True, default='')
+    applied_at       = models.DateTimeField(auto_now_add=True)
+    reviewed_at      = models.DateTimeField(null=True, blank=True)
+    reviewed_by      = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name='reviewed_applications',
+    )
+
+    class Meta:
+        db_table = 'lma_instructor_application'
+        ordering = ['-applied_at']
+
+    def __str__(self):
+        return f"{self.full_name} <{self.email}> [{self.status}]"
+
+
 class Notification(models.Model):
     recipient = models.ForeignKey(
         settings.AUTH_USER_MODEL,

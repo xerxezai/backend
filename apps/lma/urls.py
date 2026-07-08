@@ -63,4 +63,10 @@ urlpatterns = [
     # Assignments
     path('assignments/<int:assignment_id>/submit/', views.submit_assignment, name='lma-submit-assignment'),
     path('submissions/<int:submission_id>/grade/', views.grade_submission, name='lma-grade-submission'),
+
+    # Instructor Applications
+    path('become-instructor/', views.become_instructor, name='lma-become-instructor'),
+    path('instructor/applications/', views.list_applications, name='lma-applications'),
+    path('instructor/applications/<int:app_id>/approve/', views.approve_application, name='lma-approve-application'),
+    path('instructor/applications/<int:app_id>/reject/', views.reject_application, name='lma-reject-application'),
 ]
