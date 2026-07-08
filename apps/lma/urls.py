@@ -52,6 +52,10 @@ urlpatterns = [
     path('instructor/reviews/', views.instructor_reviews, name='lma-instructor-reviews'),
     path('instructor/analytics/', views.instructor_analytics, name='lma-instructor-analytics'),
     path('instructor/instructors/', views.instructor_list, name='lma-instructor-list'),
+    path('instructor/instructors/<int:instructor_id>/', views.update_instructor, name='lma-update-instructor'),
+    path('instructor/instructors/<int:instructor_id>/delete/', views.delete_instructor, name='lma-delete-instructor'),
+    path('instructor/instructors/<int:instructor_id>/courses/', views.instructor_course_list, name='lma-instructor-course-list'),
+    path('instructor/instructors/<int:instructor_id>/reset-password/', views.reset_instructor_password, name='lma-reset-instructor-password'),
     path('instructor/create-instructor/', views.create_instructor, name='lma-create-instructor'),
     path('instructor/pending-reviews/', views.pending_review_queue, name='lma-pending-reviews'),
 

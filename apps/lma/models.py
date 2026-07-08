@@ -46,8 +46,9 @@ class Course(models.Model):
     description = models.TextField()
     instructor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name='courses',
+        null=True, blank=True,
     )
     category = models.CharField(max_length=100)
     level = models.CharField(max_length=20, choices=LEVEL_CHOICES)

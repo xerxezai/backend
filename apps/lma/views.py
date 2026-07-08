@@ -1137,6 +1137,174 @@ def create_instructor(request):
     }, status=201)
 
 
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def update_instructor(request, instructor_id):
+    """PUT /api/v1/lma/instructor/instructors/{id}/ — super only."""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    try:
+        target_user = User.objects.get(id=instructor_id)
+    except User.DoesNotExist:
+        return Response({'error': 'Instructor not found.'}, status=404)
+
+    try:
+        target_profile = target_user.lma_profile
+    except LMAProfile.DoesNotExist:
+        return Response({'error': 'Instructor profile not found.'}, status=404)
+
+    full_name      = request.data.get('full_name', '').strip()
+    email          = request.data.get('email', '').strip().lower()
+    new_level      = request.data.get('instructor_level', '').strip()
+
+    # Validate level value
+    if new_level and new_level not in ('regular', 'super'):
+        return Response({'error': 'instructor_level must be "regular" or "super".'}, status=400)
+
+    # Cannot demote a super instructor
+    if new_level and new_level != target_profile.instructor_level and _is_super(target_profile):
+        return Response({'error': 'Cannot change a super instructor\'s level.'}, status=400)
+
+    # Cannot change own level
+    if new_level and target_user.id == request.user.id and new_level != profile.instructor_level:
+        return Response({'error': 'Cannot change your own instructor level.'}, status=400)
+
+    # Guard: don't leave zero super instructors
+    if new_level == 'regular' and target_profile.instructor_level == 'super':
+        super_count = LMAProfile.objects.filter(
+            can_access_instructor=True, instructor_level='super'
+        ).count()
+        if super_count <= 1:
+            return Response({'error': 'Cannot demote — this is the only super instructor.'}, status=400)
+
+    # Email uniqueness check
+    if email and email != target_user.email:
+        if User.objects.filter(email=email).exclude(pk=target_user.pk).exists():
+            return Response({'error': 'Email already in use by another account.'}, status=400)
+        target_user.email = email
+
+    # Update name
+    if full_name:
+        parts = full_name.split(' ', 1)
+        target_user.first_name = parts[0]
+        target_user.last_name  = parts[1] if len(parts) > 1 else ''
+    target_user.save()
+
+    # Update level
+    if new_level:
+        target_profile.instructor_level = new_level
+        target_profile.save(update_fields=['instructor_level'])
+
+    return Response({
+        'success': True,
+        'id': target_user.id,
+        'name': target_user.get_full_name() or target_user.username,
+        'email': target_user.email,
+        'instructor_level': target_profile.instructor_level,
+    })
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_instructor(request, instructor_id):
+    """DELETE /api/v1/lma/instructor/instructors/{id}/ — super only."""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    if int(instructor_id) == request.user.id:
+        return Response({'error': 'Cannot delete your own account.'}, status=400)
+
+    try:
+        target_user = User.objects.get(id=instructor_id)
+    except User.DoesNotExist:
+        return Response({'error': 'Instructor not found.'}, status=404)
+
+    try:
+        target_profile = target_user.lma_profile
+    except LMAProfile.DoesNotExist:
+        return Response({'error': 'Instructor profile not found.'}, status=404)
+
+    if _is_super(target_profile):
+        return Response({'error': 'Cannot delete a super instructor account.'}, status=403)
+
+    # Unassign courses before deleting user
+    courses_qs = Course.objects.filter(instructor=target_user)
+    courses_count = courses_qs.count()
+    courses_qs.update(status='draft', instructor=None)
+
+    with transaction.atomic():
+        target_profile.delete()
+        target_user.delete()
+
+    return Response({'success': True, 'courses_unassigned': courses_count})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def instructor_course_list(request, instructor_id):
+    """GET /api/v1/lma/instructor/instructors/{id}/courses/ — super only."""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    try:
+        target_user = User.objects.get(id=instructor_id)
+    except User.DoesNotExist:
+        return Response({'error': 'Instructor not found.'}, status=404)
+
+    courses = Course.objects.filter(instructor=target_user).order_by('-created_at')
+    data = [{
+        'id': c.id,
+        'title': c.title,
+        'status': c.status,
+        'total_students': c.total_students,
+        'created_at': c.created_at.date().isoformat(),
+    } for c in courses]
+    return Response(data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reset_instructor_password(request, instructor_id):
+    """POST /api/v1/lma/instructor/instructors/{id}/reset-password/ — super only."""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    try:
+        target_user = User.objects.get(id=instructor_id)
+    except User.DoesNotExist:
+        return Response({'error': 'Instructor not found.'}, status=404)
+
+    import secrets as _sec
+    import string as _str
+    alphabet = _str.ascii_letters + _str.digits + '!@#$'
+    new_password = ''.join(_sec.choice(alphabet) for _ in range(12))
+
+    target_user.set_password(new_password)
+    target_user.save(update_fields=['password'])
+
+    full_name = target_user.get_full_name() or target_user.username
+    _send_safe(
+        subject='XERXEZ Academy — Your Password Has Been Reset',
+        message=(
+            f'Hi {full_name},\n\n'
+            f'An administrator has reset your XERXEZ Academy instructor account password.\n\n'
+            f'Your new temporary password:\n'
+            f'  {new_password}\n\n'
+            f'Sign in at: https://xerxez.com/lma/login\n\n'
+            f'Please change your password after logging in.\n\n'
+            f'— XERXEZ Academy Team'
+        ),
+        recipient_list=[target_user.email],
+    )
+
+    return Response({'success': True, 'email': target_user.email})
+
+
 # ── Course review workflow ───────────────────────────────────────────────────
 
 @api_view(['POST'])
