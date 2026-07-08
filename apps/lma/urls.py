@@ -14,6 +14,9 @@ urlpatterns = [
     path('courses/<int:course_id>/update/', views.update_course, name='lma-update-course'),
     path('courses/<int:course_id>/delete/', views.delete_course, name='lma-delete-course'),
     path('courses/<int:course_id>/modules/', views.course_modules, name='lma-course-modules'),
+    path('courses/<int:course_id>/submit-for-review/', views.submit_for_review, name='lma-submit-for-review'),
+    path('courses/<int:course_id>/publish/', views.publish_course, name='lma-publish-course'),
+    path('courses/<int:course_id>/reject/', views.reject_course, name='lma-reject-course'),
 
     # Modules
     path('modules/<int:module_id>/', views.module_detail_view, name='lma-module-detail'),
@@ -48,6 +51,14 @@ urlpatterns = [
     path('instructor/enrollments/<int:enrollment_id>/', views.unenroll_student, name='lma-unenroll-student'),
     path('instructor/reviews/', views.instructor_reviews, name='lma-instructor-reviews'),
     path('instructor/analytics/', views.instructor_analytics, name='lma-instructor-analytics'),
+    path('instructor/instructors/', views.instructor_list, name='lma-instructor-list'),
+    path('instructor/create-instructor/', views.create_instructor, name='lma-create-instructor'),
+    path('instructor/pending-reviews/', views.pending_review_queue, name='lma-pending-reviews'),
+
+    # Notifications
+    path('notifications/', views.list_notifications, name='lma-notifications'),
+    path('notifications/<int:notif_id>/read/', views.mark_notification_read, name='lma-notification-read'),
+    path('notifications/read-all/', views.mark_all_notifications_read, name='lma-notifications-read-all'),
 
     # Assignments
     path('assignments/<int:assignment_id>/submit/', views.submit_assignment, name='lma-submit-assignment'),

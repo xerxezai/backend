@@ -4,7 +4,10 @@ LMA (Learning Management Application) Views
 import logging
 
 from django.contrib.auth import get_user_model
+from django.core.mail import send_mail
+from django.conf import settings as django_settings
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -17,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 from .models import (
     LMAProfile, Course, Module, Lesson, Enrollment, Assignment,
-    Submission, Certificate, Review, LessonProgress,
+    Submission, Certificate, Review, LessonProgress, Notification,
 )
 from .serializers import (
     CourseListSerializer, CourseDetailSerializer, EnrollmentSerializer,
@@ -29,12 +32,13 @@ from .serializers import (
 
 User = get_user_model()
 
-INSTRUCTOR_USERNAMES = {'danish', 'tanzeem'}   # matched case-insensitively via .lower()
+INSTRUCTOR_USERNAMES = {'danish', 'tanzeem'}
 INSTRUCTOR_EMAILS    = {
     'danish@xerxez.com',
     'tanzeem@xerxez.com',
-    'xerxez.in@gmail.com',   # Tanzeem alternate (create_superusers default)
+    'xerxez.in@gmail.com',
 }
+SUPER_INSTRUCTOR_EMAILS = ['danish@xerxez.com', 'tanzeem@xerxez.com']
 
 
 import re as _re
@@ -42,22 +46,34 @@ import re as _re
 
 def _get_or_create_lma_profile(user):
     profile, _ = LMAProfile.objects.get_or_create(user=user)
-    is_instructor = (
+    is_super = (
         user.username.lower() in INSTRUCTOR_USERNAMES or
         user.email.lower() in INSTRUCTOR_EMAILS
     )
-    if is_instructor:
+    if is_super:
         profile.lma_role = 'both'
         profile.can_access_student = True
         profile.can_access_instructor = True
+        profile.instructor_level = 'super'
         profile.save()
     return profile
 
 
+def _is_super(profile) -> bool:
+    return profile.can_access_instructor and profile.instructor_level == 'super'
+
+
 def _lma_token(user):
-    # AccessToken is stateless — no OutstandingToken DB write, so no FK
-    # constraint issue between token_blacklist_outstandingtoken and auth_user.
     return str(AccessToken.for_user(user))
+
+
+def _send_safe(subject, message, recipient_list):
+    """send_mail wrapped so email failures never break the main request."""
+    try:
+        from_email = getattr(django_settings, 'DEFAULT_FROM_EMAIL', 'xerxez.in@gmail.com')
+        send_mail(subject, message, from_email, recipient_list, fail_silently=True)
+    except Exception as exc:
+        logger.warning('LMA email failed: %s', exc)
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
@@ -73,7 +89,6 @@ def lma_login(request):
     if not email or not password:
         return Response({'error': 'Email and password are required.'}, status=400)
 
-    # Find user by email (case-insensitive) or username
     email_lower = email.lower()
     user = None
     try:
@@ -84,7 +99,6 @@ def lma_login(request):
         except User.DoesNotExist:
             pass
     except User.MultipleObjectsReturned:
-        # Multiple accounts share the same email — match on exact username fallback
         user = User.objects.filter(email__iexact=email_lower).first()
 
     if not user or not user.check_password(password):
@@ -109,6 +123,7 @@ def lma_login(request):
         'lma_role': role,
         'can_access_student': profile.can_access_student,
         'can_access_instructor': profile.can_access_instructor,
+        'instructor_level': profile.instructor_level,
         'name': name,
         'user_id': user.id,
     })
@@ -131,7 +146,6 @@ def lma_register(request):
     if User.objects.filter(email=email).exists():
         return Response({'error': 'An account with this email already exists.'}, status=400)
 
-    # Generate unique username from email prefix
     base = _re.sub(r'[^a-z0-9_]', '', email.split('@')[0]) or 'user'
     username, n = base, 1
     while User.objects.filter(username=username).exists():
@@ -146,10 +160,9 @@ def lma_register(request):
                 is_active=True,
             )
             user.set_password(password)
-            user._skip_profile_signal = True  # skip ERP UserProfile signal
+            user._skip_profile_signal = True
             user.save()
 
-            # get_or_create in case the post_save signal already created one
             profile, _ = LMAProfile.objects.get_or_create(
                 user=user,
                 defaults={
@@ -171,6 +184,7 @@ def lma_register(request):
         'lma_role': 'student',
         'can_access_student': True,
         'can_access_instructor': profile.can_access_instructor,
+        'instructor_level': profile.instructor_level,
         'name': name,
         'user_id': user.id,
     }, status=201)
@@ -226,7 +240,7 @@ def enroll(request, course_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def mock_payment(request, course_id):
-    """POST /api/v1/lma/mock-payment/{course_id}/ — simulates payment then enrolls."""
+    """POST /api/v1/lma/mock-payment/{course_id}/"""
     try:
         course = Course.objects.get(id=course_id)
     except Course.DoesNotExist:
@@ -284,36 +298,45 @@ def my_certificates(request):
     return Response(CertificateSerializer(certs, many=True).data)
 
 
-# ── Instructor ───────────────────────────────────────────────────────────────
+# ── Instructor dashboard ─────────────────────────────────────────────────────
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def instructor_dashboard(request):
-    """GET /api/v1/lma/instructor/dashboard/
-    Admin instructors (Danish/Tanzeem) see ALL courses; others see only their own.
-    """
+    """GET /api/v1/lma/instructor/dashboard/"""
     user = request.user
     profile = _get_or_create_lma_profile(user)
-    courses = (Course.objects.all() if profile.can_access_instructor
-               else Course.objects.filter(instructor=user)).order_by('-created_at')
-    course_ids = courses.values_list('id', flat=True)
 
+    if not profile.can_access_instructor:
+        return Response({'error': 'Instructor access required.'}, status=403)
+
+    is_super_user = _is_super(profile)
+    courses = (
+        Course.objects.all() if is_super_user
+        else Course.objects.filter(instructor=user)
+    ).order_by('-created_at')
+
+    course_ids = courses.values_list('id', flat=True)
     pending_submissions = Submission.objects.filter(
         assignment__course_id__in=course_ids,
         grade__isnull=True,
     ).select_related('assignment', 'student')[:20]
 
     total_students = sum(c.total_students for c in courses)
-    total_revenue = sum(float(c.price) * c.total_students for c in courses)
+
+    stats = {
+        'total_courses': courses.count(),
+        'total_students': total_students,
+        'pending_reviews': pending_submissions.count(),
+    }
+    if is_super_user:
+        total_revenue = sum(float(c.price) * c.total_students for c in courses)
+        stats['total_earnings'] = round(total_revenue, 2)
 
     return Response({
         'name': user.get_full_name() or user.username,
-        'stats': {
-            'total_courses': courses.count(),
-            'total_students': total_students,
-            'pending_reviews': pending_submissions.count(),
-            'total_earnings': round(total_revenue, 2),
-        },
+        'instructor_level': profile.instructor_level,
+        'stats': stats,
         'courses': CourseListSerializer(courses, many=True).data,
         'pending_submissions': SubmissionSerializer(pending_submissions, many=True).data,
     })
@@ -327,7 +350,12 @@ def create_course(request):
     if not profile.can_access_instructor:
         return Response({'error': 'Instructor access required.'}, status=403)
 
-    serializer = CourseCreateSerializer(data=request.data)
+    data = request.data.copy()
+    # Regular instructors can only create drafts
+    if not _is_super(profile):
+        data['status'] = 'draft'
+
+    serializer = CourseCreateSerializer(data=data)
     if serializer.is_valid():
         course = serializer.save(instructor=request.user)
         return Response(CourseListSerializer(course).data, status=201)
@@ -339,13 +367,21 @@ def create_course(request):
 def update_course(request, course_id):
     """PUT /api/v1/lma/courses/{id}/update/"""
     profile = _get_or_create_lma_profile(request.user)
+    is_super_user = _is_super(profile)
     try:
-        qs = Course.objects.all() if profile.can_access_instructor else Course.objects.filter(instructor=request.user)
+        qs = Course.objects.all() if is_super_user else Course.objects.filter(instructor=request.user)
         course = qs.get(id=course_id)
     except Course.DoesNotExist:
         return Response({'error': 'Course not found.'}, status=404)
 
-    serializer = CourseCreateSerializer(course, data=request.data, partial=True)
+    data = request.data.copy()
+    # Regular instructors cannot directly publish; block any status that isn't draft
+    if not is_super_user:
+        incoming_status = data.get('status', course.status)
+        if incoming_status not in ('draft',):
+            data['status'] = course.status  # preserve existing status
+
+    serializer = CourseCreateSerializer(course, data=data, partial=True)
     if serializer.is_valid():
         serializer.save()
         return Response(CourseListSerializer(course).data)
@@ -387,12 +423,7 @@ def enrollment_status(request, course_id):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def lesson_video_url(request, lesson_id):
-    """GET /api/v1/lma/lessons/{lesson_id}/video/
-
-    Returns the video_url for a lesson if the requester is authorized.
-    Free-preview lessons: any request (even unauthenticated) succeeds.
-    All other lessons: requester must be authenticated AND enrolled OR an instructor.
-    """
+    """GET /api/v1/lma/lessons/{lesson_id}/video/"""
     try:
         lesson = Lesson.objects.select_related('module__course').get(id=lesson_id)
     except Lesson.DoesNotExist:
@@ -401,9 +432,6 @@ def lesson_video_url(request, lesson_id):
     course = lesson.module.course
 
     if lesson.is_free_preview:
-        logger.info('LMA video access (free preview): lesson=%s course=%s user=%s',
-                    lesson.id, course.id,
-                    request.user.id if request.user.is_authenticated else 'anon')
         return Response({'video_url': lesson.video_url})
 
     if not request.user.is_authenticated:
@@ -418,8 +446,6 @@ def lesson_video_url(request, lesson_id):
         return Response({'error': 'Enrollment required to watch this lesson.'},
                         status=status.HTTP_403_FORBIDDEN)
 
-    logger.info('LMA video access: user=%s lesson=%s course=%s instructor=%s',
-                user.id, lesson.id, course.id, is_instructor)
     return Response({'video_url': lesson.video_url})
 
 
@@ -464,7 +490,7 @@ def lesson_complete(request, lesson_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def my_courses(request):
-    """GET /api/v1/lma/student/my-courses/ — Full enrollment list, no limit."""
+    """GET /api/v1/lma/student/my-courses/"""
     enrollments = (
         Enrollment.objects.filter(student=request.user)
         .select_related('course', 'course__instructor')
@@ -476,7 +502,7 @@ def my_courses(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def my_assignments(request):
-    """GET /api/v1/lma/student/assignments/ — All assignments with submission status."""
+    """GET /api/v1/lma/student/assignments/"""
     enrolled_ids = (
         Enrollment.objects.filter(student=request.user)
         .values_list('course_id', flat=True)
@@ -515,7 +541,7 @@ def my_assignments(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def my_progress(request):
-    """GET /api/v1/lma/student/progress/ — Progress report with time-series."""
+    """GET /api/v1/lma/student/progress/"""
     from django.db.models import Avg, Count
     from django.db.models.functions import TruncDate
     from datetime import timedelta
@@ -629,7 +655,7 @@ def change_password(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def browse_courses(request):
-    """GET /api/v1/lma/courses/browse/ — Published courses excluding enrolled."""
+    """GET /api/v1/lma/courses/browse/"""
     enrolled_ids = Enrollment.objects.filter(student=request.user).values_list('course_id', flat=True)
     qs = Course.objects.filter(status='published').exclude(id__in=enrolled_ids).select_related('instructor')
     return Response(CourseListSerializer(qs, many=True).data)
@@ -664,19 +690,23 @@ def instructor_courses(request):
     profile = _get_or_create_lma_profile(request.user)
     if not profile.can_access_instructor:
         return Response({'error': 'Instructor access required.'}, status=403)
-    courses = (Course.objects.all() if profile.can_access_instructor
-               else Course.objects.filter(instructor=request.user)).order_by('-created_at')
+    courses = (
+        Course.objects.all() if _is_super(profile)
+        else Course.objects.filter(instructor=request.user)
+    ).order_by('-created_at')
     return Response(CourseListSerializer(courses, many=True).data)
 
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
 def delete_course(request, course_id):
-    """DELETE /api/v1/lma/courses/{id}/delete/"""
+    """DELETE /api/v1/lma/courses/{id}/delete/ — super instructors only."""
     profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Only super instructors can delete courses.'}, status=403)
+
     try:
-        qs = Course.objects.all() if profile.can_access_instructor else Course.objects.filter(instructor=request.user)
-        course = qs.get(id=course_id)
+        course = Course.objects.get(id=course_id)
     except Course.DoesNotExist:
         return Response({'error': 'Course not found.'}, status=404)
 
@@ -698,7 +728,7 @@ def course_modules(request, course_id):
     """GET/POST /api/v1/lma/courses/{id}/modules/"""
     profile = _get_or_create_lma_profile(request.user)
     try:
-        qs = Course.objects.all() if profile.can_access_instructor else Course.objects.filter(instructor=request.user)
+        qs = Course.objects.all() if _is_super(profile) else Course.objects.filter(instructor=request.user)
         course = qs.get(id=course_id)
     except Course.DoesNotExist:
         return Response({'error': 'Course not found.'}, status=404)
@@ -721,7 +751,7 @@ def module_detail_view(request, module_id):
     profile = _get_or_create_lma_profile(request.user)
     try:
         qs = Module.objects.select_related('course').all()
-        if not profile.can_access_instructor:
+        if not _is_super(profile):
             qs = qs.filter(course__instructor=request.user)
         module = qs.get(id=module_id)
     except Module.DoesNotExist:
@@ -747,7 +777,7 @@ def module_lessons(request, module_id):
     profile = _get_or_create_lma_profile(request.user)
     try:
         qs = Module.objects.select_related('course').all()
-        if not profile.can_access_instructor:
+        if not _is_super(profile):
             qs = qs.filter(course__instructor=request.user)
         module = qs.get(id=module_id)
     except Module.DoesNotExist:
@@ -771,7 +801,7 @@ def lesson_detail_view(request, lesson_id):
     profile = _get_or_create_lma_profile(request.user)
     try:
         qs = Lesson.objects.select_related('module__course').all()
-        if not profile.can_access_instructor:
+        if not _is_super(profile):
             qs = qs.filter(module__course__instructor=request.user)
         lesson = qs.get(id=lesson_id)
     except Lesson.DoesNotExist:
@@ -801,7 +831,10 @@ def instructor_students(request):
     if not profile.can_access_instructor:
         return Response({'error': 'Instructor access required.'}, status=403)
 
-    course_qs = Course.objects.all() if profile.can_access_instructor else Course.objects.filter(instructor=request.user)
+    course_qs = (
+        Course.objects.all() if _is_super(profile)
+        else Course.objects.filter(instructor=request.user)
+    )
     course_ids = course_qs.values_list('id', flat=True)
     enrollments = (
         Enrollment.objects.filter(course_id__in=course_ids)
@@ -831,6 +864,12 @@ def student_detail(request, student_id):
         return Response({'error': 'Instructor access required.'}, status=403)
 
     user = get_object_or_404(User, id=student_id)
+
+    # Regular instructors can only view students enrolled in their own courses
+    if not _is_super(profile):
+        own_course_ids = Course.objects.filter(instructor=request.user).values_list('id', flat=True)
+        if not Enrollment.objects.filter(student=user, course_id__in=own_course_ids).exists():
+            return Response({'error': 'Student not found in your courses.'}, status=404)
 
     enrollments = (
         Enrollment.objects.filter(student=user)
@@ -935,6 +974,11 @@ def unenroll_student(request, enrollment_id):
         return Response({'error': 'Instructor access required.'}, status=403)
 
     enrollment = get_object_or_404(Enrollment, id=enrollment_id)
+
+    # Regular instructors can only unenroll from their own courses
+    if not _is_super(profile) and enrollment.course.instructor != request.user:
+        return Response({'error': 'Permission denied.'}, status=403)
+
     course = enrollment.course
     student = enrollment.student
 
@@ -953,7 +997,10 @@ def unenroll_student(request, enrollment_id):
 def instructor_reviews(request):
     """GET /api/v1/lma/instructor/reviews/"""
     profile = _get_or_create_lma_profile(request.user)
-    course_qs = Course.objects.all() if profile.can_access_instructor else Course.objects.filter(instructor=request.user)
+    course_qs = (
+        Course.objects.all() if _is_super(profile)
+        else Course.objects.filter(instructor=request.user)
+    )
     course_ids = course_qs.values_list('id', flat=True)
     reviews = (
         Review.objects.filter(course_id__in=course_ids)
@@ -978,22 +1025,333 @@ def instructor_analytics(request):
     from django.db.models import Avg
 
     profile = _get_or_create_lma_profile(request.user)
-    courses = (Course.objects.all() if profile.can_access_instructor
-               else Course.objects.filter(instructor=request.user)).order_by('-created_at')
+    is_super_user = _is_super(profile)
+    courses = (
+        Course.objects.all() if is_super_user
+        else Course.objects.filter(instructor=request.user)
+    ).order_by('-created_at')
+
     data = []
     for c in courses:
         enrollments = Enrollment.objects.filter(course=c)
         completed = enrollments.filter(completed=True).count()
         total = enrollments.count()
         avg_rating = Review.objects.filter(course=c).aggregate(avg=Avg('rating'))['avg'] or 0
-        data.append({
+        entry = {
             'id': c.id,
             'title': c.title,
             'total_students': c.total_students,
             'completed': completed,
             'completion_rate': round((completed / max(total, 1)) * 100, 1),
             'avg_rating': round(float(avg_rating), 1),
-            'revenue': round(float(c.price) * c.total_students, 2),
             'status': c.status,
-        })
+        }
+        if is_super_user:
+            entry['revenue'] = round(float(c.price) * c.total_students, 2)
+        data.append(entry)
+    return Response(data)
+
+
+# ── Instructor management (super only) ──────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def instructor_list(request):
+    """GET /api/v1/lma/instructor/instructors/ — list all instructors."""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    instructor_profiles = LMAProfile.objects.filter(
+        can_access_instructor=True
+    ).select_related('user').order_by('instructor_level', 'user__date_joined')
+
+    data = [{
+        'id': p.user.id,
+        'name': p.user.get_full_name() or p.user.username,
+        'email': p.user.email,
+        'username': p.user.username,
+        'instructor_level': p.instructor_level,
+        'date_joined': p.user.date_joined.isoformat(),
+        'course_count': Course.objects.filter(instructor=p.user).count(),
+    } for p in instructor_profiles]
+    return Response(data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_instructor(request):
+    """POST /api/v1/lma/instructor/create-instructor/ — super only."""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    name = request.data.get('name', '').strip()
+    email = request.data.get('email', '').strip().lower()
+    password = request.data.get('password', '')
+    bio = request.data.get('bio', '').strip()
+
+    if not name or not email or not password:
+        return Response({'error': 'Name, email and password are required.'}, status=400)
+    if len(password) < 6:
+        return Response({'error': 'Password must be at least 6 characters.'}, status=400)
+    if not _re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
+        return Response({'error': 'Enter a valid email address.'}, status=400)
+    if User.objects.filter(email=email).exists():
+        return Response({'error': 'An account with this email already exists.'}, status=400)
+
+    base = _re.sub(r'[^a-z0-9_]', '', email.split('@')[0]) or 'instructor'
+    username, n = base, 1
+    while User.objects.filter(username=username).exists():
+        username = f"{base}{n}"; n += 1
+
+    parts = name.split(' ', 1)
+    try:
+        with transaction.atomic():
+            user = User(
+                username=username, email=email,
+                first_name=parts[0], last_name=parts[1] if len(parts) > 1 else '',
+                is_active=True,
+            )
+            user.set_password(password)
+            user._skip_profile_signal = True
+            user.save()
+
+            lma_profile, _ = LMAProfile.objects.get_or_create(user=user)
+            lma_profile.lma_role = 'instructor'
+            lma_profile.can_access_student = False
+            lma_profile.can_access_instructor = True
+            lma_profile.instructor_level = 'regular'
+            lma_profile.bio = bio
+            lma_profile.save()
+    except Exception as exc:
+        return Response({'error': f'Could not create instructor: {exc}'}, status=400)
+
+    return Response({
+        'id': user.id,
+        'name': name,
+        'email': email,
+        'username': username,
+        'instructor_level': 'regular',
+    }, status=201)
+
+
+# ── Course review workflow ───────────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def submit_for_review(request, course_id):
+    """POST /api/v1/lma/courses/{id}/submit-for-review/"""
+    profile = _get_or_create_lma_profile(request.user)
+    if not profile.can_access_instructor:
+        return Response({'error': 'Instructor access required.'}, status=403)
+
+    try:
+        course = Course.objects.get(id=course_id, instructor=request.user)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found.'}, status=404)
+
+    if course.status not in ('draft', 'rejected'):
+        return Response(
+            {'error': f'Cannot submit — course is currently "{course.status}".'},
+            status=400,
+        )
+
+    course.status = 'pending_review'
+    course.rejection_reason = ''
+    course.save(update_fields=['status', 'rejection_reason'])
+
+    instructor_name = request.user.get_full_name() or request.user.username
+
+    # Notify super instructors in-app
+    super_users = User.objects.filter(
+        Q(username__in=INSTRUCTOR_USERNAMES) | Q(email__in=INSTRUCTOR_EMAILS)
+    ).distinct()
+    for su in super_users:
+        Notification.objects.create(
+            recipient=su,
+            title='Course Submitted for Review',
+            message=f'"{course.title}" by {instructor_name} is awaiting your review.',
+            course=course,
+        )
+
+    # Send email to super instructors
+    _send_safe(
+        subject=f'[Xerxez LMA] Course Review Request: {course.title}',
+        message=(
+            f'Hello,\n\n'
+            f'{instructor_name} has submitted the course "{course.title}" for review.\n\n'
+            f'Please log in to the Xerxez LMA instructor dashboard to review and publish or reject it.\n\n'
+            f'— Xerxez LMA'
+        ),
+        recipient_list=SUPER_INSTRUCTOR_EMAILS,
+    )
+
+    return Response({'success': True, 'status': 'pending_review'})
+
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def publish_course(request, course_id):
+    """PUT /api/v1/lma/courses/{id}/publish/ — super only."""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    try:
+        course = Course.objects.select_related('instructor').get(id=course_id)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found.'}, status=404)
+
+    if course.status != 'pending_review':
+        return Response(
+            {'error': f'Course is "{course.status}" — only pending_review courses can be published.'},
+            status=400,
+        )
+
+    course.status = 'published'
+    course.rejection_reason = ''
+    course.save(update_fields=['status', 'rejection_reason'])
+
+    # Notify instructor in-app
+    Notification.objects.create(
+        recipient=course.instructor,
+        title='Course Published!',
+        message=f'Congratulations! Your course "{course.title}" has been published.',
+        course=course,
+    )
+
+    # Email instructor
+    if course.instructor.email:
+        _send_safe(
+            subject=f'[Xerxez LMA] Your course "{course.title}" is now live!',
+            message=(
+                f'Hi {course.instructor.get_full_name() or course.instructor.username},\n\n'
+                f'Great news! Your course "{course.title}" has been reviewed and is now published on Xerxez LMA.\n\n'
+                f'Students can now enroll and start learning.\n\n'
+                f'— Xerxez LMA'
+            ),
+            recipient_list=[course.instructor.email],
+        )
+
+    return Response({'success': True, 'status': 'published'})
+
+
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+def reject_course(request, course_id):
+    """PUT /api/v1/lma/courses/{id}/reject/ — super only."""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    try:
+        course = Course.objects.select_related('instructor').get(id=course_id)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found.'}, status=404)
+
+    if course.status != 'pending_review':
+        return Response(
+            {'error': f'Course is "{course.status}" — only pending_review courses can be rejected.'},
+            status=400,
+        )
+
+    reason = request.data.get('reason', '').strip()
+    if not reason:
+        return Response({'error': 'A rejection reason is required.'}, status=400)
+
+    course.status = 'rejected'
+    course.rejection_reason = reason
+    course.save(update_fields=['status', 'rejection_reason'])
+
+    # Notify instructor in-app
+    Notification.objects.create(
+        recipient=course.instructor,
+        title='Course Needs Changes',
+        message=f'Your course "{course.title}" was not approved. Reason: {reason}',
+        course=course,
+    )
+
+    # Email instructor
+    if course.instructor.email:
+        _send_safe(
+            subject=f'[Xerxez LMA] Course "{course.title}" — Changes Required',
+            message=(
+                f'Hi {course.instructor.get_full_name() or course.instructor.username},\n\n'
+                f'Your course "{course.title}" requires some changes before it can be published.\n\n'
+                f'Feedback: {reason}\n\n'
+                f'Please update your course and re-submit for review.\n\n'
+                f'— Xerxez LMA'
+            ),
+            recipient_list=[course.instructor.email],
+        )
+
+    return Response({'success': True, 'status': 'rejected'})
+
+
+# ── Notifications ────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_notifications(request):
+    """GET /api/v1/lma/notifications/"""
+    notifs = Notification.objects.filter(recipient=request.user)[:50]
+    data = [{
+        'id': n.id,
+        'title': n.title,
+        'message': n.message,
+        'is_read': n.is_read,
+        'created_at': n.created_at.isoformat(),
+        'course_id': n.course_id,
+    } for n in notifs]
+    unread = Notification.objects.filter(recipient=request.user, is_read=False).count()
+    return Response({'notifications': data, 'unread_count': unread})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mark_notification_read(request, notif_id):
+    """POST /api/v1/lma/notifications/{id}/read/"""
+    try:
+        notif = Notification.objects.get(id=notif_id, recipient=request.user)
+    except Notification.DoesNotExist:
+        return Response({'error': 'Notification not found.'}, status=404)
+    notif.is_read = True
+    notif.save(update_fields=['is_read'])
+    return Response({'success': True})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mark_all_notifications_read(request):
+    """POST /api/v1/lma/notifications/read-all/"""
+    Notification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
+    return Response({'success': True})
+
+
+# ── Pending review queue (super only) ───────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def pending_review_queue(request):
+    """GET /api/v1/lma/instructor/pending-reviews/"""
+    profile = _get_or_create_lma_profile(request.user)
+    if not _is_super(profile):
+        return Response({'error': 'Super instructor access required.'}, status=403)
+
+    courses = Course.objects.filter(
+        status='pending_review'
+    ).select_related('instructor').order_by('-updated_at')
+
+    data = [{
+        'id': c.id,
+        'title': c.title,
+        'description': c.description[:200],
+        'instructor_name': c.instructor.get_full_name() or c.instructor.username,
+        'instructor_email': c.instructor.email,
+        'category': c.category,
+        'level': c.level,
+        'price': float(c.price),
+        'updated_at': c.updated_at.isoformat(),
+    } for c in courses]
     return Response(data)

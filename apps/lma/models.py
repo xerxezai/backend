@@ -8,6 +8,10 @@ class LMAProfile(models.Model):
         ('instructor', 'Instructor'),
         ('both', 'Both'),
     ]
+    LEVEL_CHOICES = [
+        ('super', 'Super Instructor'),
+        ('regular', 'Regular Instructor'),
+    ]
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -16,6 +20,9 @@ class LMAProfile(models.Model):
     lma_role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='student')
     can_access_student = models.BooleanField(default=True)
     can_access_instructor = models.BooleanField(default=False)
+    instructor_level = models.CharField(
+        max_length=20, choices=LEVEL_CHOICES, default='super',
+    )
     bio = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -31,7 +38,9 @@ class Course(models.Model):
     ]
     STATUS_CHOICES = [
         ('draft', 'Draft'),
+        ('pending_review', 'Pending Review'),
         ('published', 'Published'),
+        ('rejected', 'Rejected'),
     ]
     title = models.CharField(max_length=200)
     description = models.TextField()
@@ -52,6 +61,7 @@ class Course(models.Model):
     lessons = models.IntegerField(default=0)
     tech_stack = models.JSONField(default=list)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    rejection_reason = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -180,3 +190,26 @@ class LessonProgress(models.Model):
 
     def __str__(self):
         return f"{self.student.username} ✓ {self.lesson.title}"
+
+
+class Notification(models.Model):
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='notifications',
+    )
+    title = models.CharField(max_length=200)
+    message = models.CharField(max_length=500)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    course = models.ForeignKey(
+        Course, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='notifications',
+    )
+
+    class Meta:
+        db_table = 'lma_notification'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"→{self.recipient.username}: {self.title}"
