@@ -1,10 +1,13 @@
 """
 Deletes ALL existing users, then creates the two XERXEZ superuser accounts.
+Requires the DJANGO_SUPERUSER_PASSWORD environment variable.
 Run with:  python manage.py create_superusers
 """
 
+import os
+
 from django.contrib.auth import get_user_model
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
 from django.db.models.signals import post_save
 
@@ -12,14 +15,12 @@ SUPERUSERS = [
     {
         "username":   "Tanzeem",
         "email":      "xerxez.in@gmail.com",
-        "password":   "[REDACTED]",
         "first_name": "Tanzeem",
         "last_name":  "",
     },
     {
         "username":   "Danish",
         "email":      "danish@xerxez.com",
-        "password":   "[REDACTED]",
         "first_name": "Danish",
         "last_name":  "",
     },
@@ -32,6 +33,10 @@ class Command(BaseCommand):
     def handle(self, *args, **kwargs):
         from apps.users.models import UserProfile, create_user_profile
         User = get_user_model()
+
+        password = os.environ.get("DJANGO_SUPERUSER_PASSWORD")
+        if not password:
+            raise CommandError("Set the DJANGO_SUPERUSER_PASSWORD environment variable first.")
 
         # ── 1. Delete all existing users (profiles cascade-delete) ──
         count = User.objects.count()
@@ -57,7 +62,7 @@ class Command(BaseCommand):
                 user = User.objects.create_superuser(
                     username=data["username"],
                     email=data["email"],
-                    password=data["password"],
+                    password=password,
                     first_name=data["first_name"],
                     last_name=data["last_name"],
                 )
@@ -68,7 +73,7 @@ class Command(BaseCommand):
                     pass
 
                 self.stdout.write(self.style.SUCCESS(
-                    f"  [CREATED] {data['username']}  |  email: {data['email']}  |  password: {data['password']}"
+                    f"  [CREATED] {data['username']}  |  email: {data['email']}"
                 ))
         finally:
             post_save.connect(create_user_profile, sender=User)

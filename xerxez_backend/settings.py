@@ -188,9 +188,17 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': backend_config.get('api.rate_limiting.default_rate'),
-        'user': backend_config.get('api.rate_limiting.auth_rate')
+        'user': backend_config.get('api.rate_limiting.auth_rate'),
+        'login': '5/min',
+        'become_instructor': '3/hour',
     }
 }
+
+if not DEBUG:
+    # Browsable API is a development convenience only
+    REST_FRAMEWORK['DEFAULT_RENDERER_CLASSES'] = [
+        'rest_framework.renderers.JSONRenderer',
+    ]
 
 # JWT configuration
 SIMPLE_JWT = {
@@ -199,11 +207,14 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
-    'SIGNING_KEY': os.getenv('JWT_SECRET_KEY', os.getenv('DJANGO_SECRET_KEY', 'fallback-jwt-secret')),
+    'SIGNING_KEY': os.getenv('JWT_SECRET_KEY') or SECRET_KEY,
 }
 
-# CORS configuration — allow all origins so contact form works from any deployment URL
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS configuration — locked to explicit origins in production.
+# Set CORS_ALLOW_ALL_ORIGINS=True in the environment only for throwaway preview deploys.
+CORS_ALLOW_ALL_ORIGINS = os.getenv(
+    'CORS_ALLOW_ALL_ORIGINS', 'True' if DEBUG else 'False'
+).lower() in ('true', '1', 'yes')
 CORS_ALLOWED_ORIGINS = backend_config.get('api.cors.allowed_origins')
 CORS_ALLOW_CREDENTIALS = backend_config.get('api.cors.allow_credentials')
 CORS_PREFLIGHT_MAX_AGE = backend_config.get('api.cors.max_age')
@@ -272,6 +283,9 @@ REDOC_SETTINGS = {
     'EXPAND_RESPONSES': [200, 201],
 }
 
+# Clickjacking protection (XFrameOptionsMiddleware)
+X_FRAME_OPTIONS = 'DENY'
+
 # Production-specific settings
 if not DEBUG:
     # Security settings for production
@@ -279,7 +293,10 @@ if not DEBUG:
     SECURE_CONTENT_TYPE_NOSNIFF = True
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-    SECURE_HSTS_SECONDS = 3600
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
     
     # Railway terminates SSL at the proxy — Django must NOT redirect HTTP→HTTPS
     # or the health-check loops. Set SECURE_SSL_REDIRECT=True in Railway env to opt in.

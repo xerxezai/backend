@@ -11,6 +11,7 @@ User = get_user_model()
 from rest_framework import generics, permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 from drf_yasg.utils import swagger_auto_schema
@@ -48,7 +49,8 @@ class LoginView(generics.GenericAPIView):
     """POST /api/v1/auth/login/ — returns JWT access + refresh tokens."""
     serializer_class = LoginSerializer
     permission_classes = [permissions.AllowAny]
-    throttle_scope = 'anon'
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'login'
 
     @swagger_auto_schema(request_body=LoginSerializer)
     def post(self, request):

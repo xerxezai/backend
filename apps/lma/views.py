@@ -11,9 +11,20 @@ from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
+
+from apps.core.sanitize import clean_text
+
+
+class LoginRateThrottle(AnonRateThrottle):
+    scope = 'login'
+
+
+class BecomeInstructorRateThrottle(AnonRateThrottle):
+    scope = 'become_instructor'
 from rest_framework_simplejwt.tokens import AccessToken
 
 logger = logging.getLogger(__name__)
@@ -81,6 +92,7 @@ def _send_safe(subject, message, recipient_list):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([LoginRateThrottle])
 def lma_login(request):
     """POST /api/v1/lma/auth/login/"""
     email = request.data.get('email', '').strip()
@@ -132,6 +144,7 @@ def lma_login(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([LoginRateThrottle])
 def lma_register(request):
     """POST /api/v1/lma/auth/register/"""
     name = request.data.get('name', '').strip()
@@ -400,13 +413,16 @@ def submit_assignment(request, assignment_id):
     except Assignment.DoesNotExist:
         return Response({'error': 'Assignment not found.'}, status=404)
 
+    if not Enrollment.objects.filter(student=request.user, course=assignment.course).exists():
+        return Response({'error': 'Not enrolled in this course.'}, status=403)
+
     submission, created = Submission.objects.get_or_create(
         assignment=assignment,
         student=request.user,
-        defaults={'content': request.data.get('content', '')},
+        defaults={'content': clean_text(request.data.get('content', ''))},
     )
     if not created:
-        submission.content = request.data.get('content', submission.content)
+        submission.content = clean_text(request.data.get('content', submission.content))
         submission.submitted_at = timezone.now()
         submission.save()
 
@@ -609,10 +625,10 @@ def lma_profile(request):
             'bio': profile.bio,
         })
 
-    name = request.data.get('name', '').strip()
+    name = clean_text(request.data.get('name', '').strip())
     email = request.data.get('email', '').strip().lower()
-    phone = request.data.get('phone', '').strip()
-    bio = request.data.get('bio', '').strip()
+    phone = clean_text(request.data.get('phone', '').strip())
+    bio = clean_text(request.data.get('bio', '').strip())
 
     if name:
         parts = name.split(' ', 1)
@@ -1042,7 +1058,7 @@ def submit_review(request, course_id):
         return Response({'error': 'You must be enrolled in this course to leave a review.'}, status=403)
 
     rating = request.data.get('rating')
-    comment = request.data.get('comment', '').strip()
+    comment = clean_text(request.data.get('comment', '').strip())
 
     try:
         rating = int(rating)
@@ -1651,14 +1667,15 @@ def _get_super_users():
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([BecomeInstructorRateThrottle])
 def become_instructor(request):
     """POST /api/v1/lma/become-instructor/ — public, no auth required."""
-    full_name = request.data.get('full_name', '').strip()
+    full_name = clean_text(request.data.get('full_name', '').strip())
     email     = request.data.get('email', '').strip().lower()
-    phone     = request.data.get('phone', '').strip()
-    expertise = request.data.get('expertise', '').strip()
-    bio       = request.data.get('bio', '').strip()
-    why_teach = request.data.get('why_teach', '').strip()
+    phone     = clean_text(request.data.get('phone', '').strip())
+    expertise = clean_text(request.data.get('expertise', '').strip())
+    bio       = clean_text(request.data.get('bio', '').strip())
+    why_teach = clean_text(request.data.get('why_teach', '').strip())
     password  = request.data.get('password', '')
 
     if not full_name or not email or not phone or not bio or not why_teach:

@@ -285,7 +285,16 @@ class BackendConfig:
         ]
     
     def _get_allowed_hosts(self) -> List[str]:
-        return ['*']
+        env_value = os.getenv('ALLOWED_HOSTS')
+        if env_value:
+            return [h.strip() for h in env_value.split(',') if h.strip()]
+        if self.environment == 'production':
+            return [
+                'xerxez.com',
+                'www.xerxez.com',
+                '.up.railway.app',
+            ]
+        return ['localhost', '127.0.0.1', '[::1]']
        
     def _get_trusted_origins(self) -> List[str]:
         """Get CSRF trusted origins"""

@@ -1,5 +1,6 @@
 from django.db.models import Sum, Avg, Count
 from rest_framework import serializers
+from apps.core.sanitize import clean_text
 from .models import (
     LMAProfile, Course, Module, Lesson,
     Enrollment, Assignment, Submission, Certificate, Review, LessonProgress,
@@ -27,6 +28,12 @@ class LessonWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lesson
         fields = ['title', 'duration', 'order', 'is_free_preview', 'content', 'video_url']
+
+    def validate_title(self, value):
+        return clean_text(value)
+
+    def validate_content(self, value):
+        return clean_text(value)
 
 
 class LessonPublicSerializer(serializers.ModelSerializer):
@@ -68,6 +75,9 @@ class ModuleWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Module
         fields = ['title', 'order', 'duration']
+
+    def validate_title(self, value):
+        return clean_text(value)
 
 
 class CourseListSerializer(serializers.ModelSerializer):
@@ -246,3 +256,9 @@ class CourseCreateSerializer(serializers.ModelSerializer):
             'title', 'description', 'category', 'level', 'price',
             'badge', 'header_color', 'tech_stack', 'status',
         ]
+
+    def validate_title(self, value):
+        return clean_text(value)
+
+    def validate_description(self, value):
+        return clean_text(value)
