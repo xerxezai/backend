@@ -154,3 +154,84 @@ class PaySlip(models.Model):
 
     def __str__(self):
         return f'PaySlip — {self.payroll}'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Added HR features: Performance, Documents, Onboarding, Exit
+# (Attendance & Payroll already exist above — reused, not duplicated.)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PerformanceReview(models.Model):
+    RATING_CHOICES = [(1, 'Poor'), (2, 'Below Average'), (3, 'Average'), (4, 'Good'), (5, 'Excellent')]
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='reviews')
+    reviewer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    period = models.CharField(max_length=50)
+    rating = models.IntegerField(choices=RATING_CHOICES)
+    goals_achieved = models.TextField(blank=True)
+    areas_improvement = models.TextField(blank=True)
+    comments = models.TextField(blank=True)
+    review_date = models.DateField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'hr_performance_review'
+        ordering = ['-review_date']
+
+    def __str__(self):
+        return f'{self.employee} — {self.period} ({self.rating}/5)'
+
+
+class EmployeeDocument(models.Model):
+    DOC_TYPE_CHOICES = [
+        ('offer_letter', 'Offer Letter'), ('id_proof', 'ID Proof'),
+        ('contract', 'Contract'), ('certificate', 'Certificate'), ('other', 'Other'),
+    ]
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='documents')
+    doc_type = models.CharField(max_length=20, choices=DOC_TYPE_CHOICES)
+    name = models.CharField(max_length=200)
+    file = models.FileField(upload_to='hr/documents/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'hr_employee_document'
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f'{self.employee} — {self.name}'
+
+
+class OnboardingChecklist(models.Model):
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='onboarding')
+    task = models.CharField(max_length=200)
+    completed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = 'hr_onboarding_checklist'
+        ordering = ['order']
+
+    def __str__(self):
+        return f'{self.employee} — {self.task}'
+
+
+class ExitManagement(models.Model):
+    REASON_CHOICES = [
+        ('resignation', 'Resignation'), ('termination', 'Termination'),
+        ('retirement', 'Retirement'), ('contract_end', 'Contract End'),
+    ]
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='exit')
+    reason = models.CharField(max_length=20, choices=REASON_CHOICES)
+    last_working_day = models.DateField()
+    notice_period_days = models.IntegerField(default=30)
+    exit_interview_done = models.BooleanField(default=False)
+    final_settlement_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    settlement_paid = models.BooleanField(default=False)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'hr_exit_management'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.employee} — {self.get_reason_display()}'

@@ -2,7 +2,9 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (AttendanceViewSet, DepartmentViewSet, EmployeeViewSet,
                     LeaveRequestViewSet, PaySlipViewSet, PayrollViewSet,
-                    SalaryStructureViewSet, ShiftViewSet)
+                    SalaryStructureViewSet, ShiftViewSet,
+                    PerformanceReviewViewSet, EmployeeDocumentViewSet,
+                    OnboardingChecklistViewSet, ExitManagementViewSet)
 
 app_name = 'hr'
 router = DefaultRouter()
@@ -18,5 +20,11 @@ router.register('shifts', ShiftViewSet, basename='shift')
 router.register('salary-structures', SalaryStructureViewSet, basename='salary-structure')
 router.register('payroll', PayrollViewSet, basename='payroll')
 router.register('payslips', PaySlipViewSet, basename='payslip')
+
+# Added HR features
+router.register('reviews', PerformanceReviewViewSet, basename='review')
+router.register('documents', EmployeeDocumentViewSet, basename='document')
+router.register('onboarding', OnboardingChecklistViewSet, basename='onboarding')
+router.register('exit', ExitManagementViewSet, basename='exit')
 
 urlpatterns = router.urls

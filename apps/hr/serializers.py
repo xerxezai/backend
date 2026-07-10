@@ -1,5 +1,8 @@
 from rest_framework import serializers
-from .models import Department, Employee, Attendance, LeaveRequest, Shift, SalaryStructure, Payroll, PaySlip
+from .models import (
+    Department, Employee, Attendance, LeaveRequest, Shift, SalaryStructure, Payroll, PaySlip,
+    PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement,
+)
 
 
 def _gen_code(model, prefix, pad=3):
@@ -99,4 +102,52 @@ class PaySlipSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PaySlip
+        fields = '__all__'
+
+
+class PerformanceReviewSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source='employee.full_name', read_only=True)
+    reviewer_username = serializers.CharField(source='reviewer.username', read_only=True)
+    rating_label = serializers.CharField(source='get_rating_display', read_only=True)
+
+    class Meta:
+        model = PerformanceReview
+        fields = '__all__'
+        read_only_fields = ['reviewer', 'review_date']
+
+
+class EmployeeDocumentSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source='employee.full_name', read_only=True)
+    doc_type_label = serializers.CharField(source='get_doc_type_display', read_only=True)
+    file_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EmployeeDocument
+        fields = '__all__'
+        read_only_fields = ['employee', 'uploaded_at']
+
+    def get_file_url(self, obj):
+        if not obj.file:
+            return None
+        request = self.context.get('request')
+        url = obj.file.url
+        return request.build_absolute_uri(url) if request else url
+
+
+class OnboardingChecklistSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source='employee.full_name', read_only=True)
+
+    class Meta:
+        model = OnboardingChecklist
+        fields = '__all__'
+        read_only_fields = ['employee', 'completed_at']
+
+
+class ExitManagementSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source='employee.full_name', read_only=True)
+    employee_code = serializers.CharField(source='employee.code', read_only=True)
+    reason_label = serializers.CharField(source='get_reason_display', read_only=True)
+
+    class Meta:
+        model = ExitManagement
         fields = '__all__'

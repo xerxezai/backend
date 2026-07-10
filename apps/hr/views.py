@@ -9,12 +9,26 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from rest_framework.parsers import MultiPartParser, FormParser
+
 from .models import (Attendance, Department, Employee, LeaveRequest, PaySlip,
-                     Payroll, SalaryStructure, Shift)
+                     Payroll, SalaryStructure, Shift,
+                     PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement)
 from .serializers import (AttendanceSerializer, DepartmentSerializer,
                           EmployeeSerializer, LeaveRequestSerializer,
                           PaySlipSerializer, PayrollSerializer,
-                          SalaryStructureSerializer, ShiftSerializer)
+                          SalaryStructureSerializer, ShiftSerializer,
+                          PerformanceReviewSerializer, EmployeeDocumentSerializer,
+                          OnboardingChecklistSerializer, ExitManagementSerializer)
+
+DEFAULT_ONBOARDING_TASKS = [
+    'Email account created',
+    'Laptop/equipment assigned',
+    'Access cards issued',
+    'HR documentation completed',
+    'Team introduction done',
+    'First week training completed',
+]
 
 
 class DepartmentViewSet(viewsets.ModelViewSet):
@@ -34,6 +48,31 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter, DjangoFilterBackend]
     search_fields = ['full_name', 'email', 'code']
     filterset_fields = ['department', 'status']
+
+    @action(detail=True, methods=['get', 'post'], url_path='documents',
+            parser_classes=[MultiPartParser, FormParser])
+    def documents(self, request, pk=None):
+        employee = self.get_object()
+        if request.method == 'POST':
+            ser = EmployeeDocumentSerializer(data=request.data, context={'request': request})
+            ser.is_valid(raise_exception=True)
+            ser.save(employee=employee)
+            return Response(ser.data, status=status.HTTP_201_CREATED)
+        qs = employee.documents.all()
+        return Response(EmployeeDocumentSerializer(qs, many=True, context={'request': request}).data)
+
+    @action(detail=True, methods=['get', 'post'], url_path='onboarding')
+    def onboarding(self, request, pk=None):
+        employee = self.get_object()
+        if request.method == 'POST':
+            # Seed the default 6-item checklist if none exists yet.
+            if not employee.onboarding.exists():
+                OnboardingChecklist.objects.bulk_create([
+                    OnboardingChecklist(employee=employee, task=t, order=i)
+                    for i, t in enumerate(DEFAULT_ONBOARDING_TASKS)
+                ])
+        qs = employee.onboarding.all()
+        return Response(OnboardingChecklistSerializer(qs, many=True).data)
 
 
 class AttendanceViewSet(viewsets.ModelViewSet):
@@ -145,6 +184,31 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         if att_status := request.query_params.get('status'):
             qs = qs.filter(status=att_status)
         return Response(AttendanceSerializer(qs, many=True).data)
+
+    @action(detail=False, methods=['get'], url_path='summary')
+    def summary(self, request):
+        """GET /hr/attendance/summary/?employee_id=&month=&year= — per-employee monthly counts."""
+        month = request.query_params.get('month')
+        year = request.query_params.get('year')
+        qs = Attendance.objects.all()
+        if emp := request.query_params.get('employee_id'):
+            qs = qs.filter(employee_id=emp)
+        if month:
+            qs = qs.filter(date__month=int(month))
+        if year:
+            qs = qs.filter(date__year=int(year))
+
+        buckets = {}
+        for att in qs.select_related('employee'):
+            b = buckets.setdefault(att.employee_id, {
+                'employee_id': att.employee_id,
+                'employee_name': att.employee.full_name,
+                'present': 0, 'absent': 0, 'late': 0, 'half_day': 0, 'total': 0,
+            })
+            key = att.status if att.status in ('present', 'absent', 'late', 'half_day') else 'present'
+            b[key] += 1
+            b['total'] += 1
+        return Response(list(buckets.values()))
 
 
 class LeaveRequestViewSet(viewsets.ModelViewSet):
@@ -289,6 +353,13 @@ class PayrollViewSet(viewsets.ModelViewSet):
         qs = Payroll.objects.filter(employee=employee).order_by('-year', '-month')
         return Response(PayrollSerializer(qs, many=True).data)
 
+    @action(detail=True, methods=['get'], url_path='payslip')
+    def payslip(self, request, pk=None):
+        """GET /hr/payroll/{id}/payslip/ — full payslip detail for the modal/download."""
+        payroll = self.get_object()
+        PaySlip.objects.get_or_create(payroll=payroll)
+        return Response(PayrollSerializer(payroll).data)
+
     @action(detail=False, methods=['get'], url_path='report')
     def report(self, request):
         if not request.user.is_staff:
@@ -308,3 +379,68 @@ class PaySlipViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['payroll__employee', 'payroll__month', 'payroll__year']
+
+
+class PerformanceReviewViewSet(viewsets.ModelViewSet):
+    queryset = PerformanceReview.objects.select_related('employee', 'reviewer').all()
+    serializer_class = PerformanceReviewSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['employee', 'rating']
+
+    def perform_create(self, serializer):
+        serializer.save(reviewer=self.request.user)
+
+
+class EmployeeDocumentViewSet(viewsets.ModelViewSet):
+    queryset = EmployeeDocument.objects.select_related('employee').all()
+    serializer_class = EmployeeDocumentSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['employee', 'doc_type']
+
+
+class OnboardingChecklistViewSet(viewsets.ModelViewSet):
+    queryset = OnboardingChecklist.objects.select_related('employee').all()
+    serializer_class = OnboardingChecklistSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['employee', 'completed']
+
+    @action(detail=True, methods=['patch'], url_path='toggle')
+    def toggle(self, request, pk=None):
+        item = self.get_object()
+        item.completed = not item.completed
+        item.completed_at = timezone.now() if item.completed else None
+        item.save()
+        return Response(OnboardingChecklistSerializer(item).data)
+
+
+class ExitManagementViewSet(viewsets.ModelViewSet):
+    queryset = ExitManagement.objects.select_related('employee').all()
+    serializer_class = ExitManagementSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['employee', 'reason', 'settlement_paid']
+
+    @action(detail=True, methods=['patch'], url_path='mark-interview-done')
+    def mark_interview_done(self, request, pk=None):
+        rec = self.get_object()
+        rec.exit_interview_done = True
+        rec.save()
+        return Response(ExitManagementSerializer(rec).data)
+
+    @action(detail=True, methods=['patch'], url_path='mark-settlement-paid')
+    def mark_settlement_paid(self, request, pk=None):
+        rec = self.get_object()
+        rec.settlement_paid = True
+        amount = request.data.get('final_settlement_amount')
+        if amount is not None:
+            rec.final_settlement_amount = amount
+        rec.save()
+        return Response(ExitManagementSerializer(rec).data)
