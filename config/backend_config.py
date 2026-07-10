@@ -133,6 +133,10 @@ class BackendConfig:
                     'enabled': True,
                     'path': 'apps.contact'
                 },
+                'chatbot': {
+                    'enabled': True,
+                    'path': 'apps.chatbot'
+                },
                 'analytics': {
                     'enabled': True,
                     'path': 'apps.analytics'

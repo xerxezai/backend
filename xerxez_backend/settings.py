@@ -33,6 +33,8 @@ SECRET_KEY = backend_config.get('security.secret_key')
 
 PORT = os.environ.get('PORT', '8000')
 
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = backend_config.is_debug_enabled()
 
