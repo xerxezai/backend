@@ -43,7 +43,7 @@ api_patterns = [
     path('projects/', include('apps.projects.urls')),
     path('contact/', include('apps.contact.urls')),
     path('analytics/', include('apps.analytics.urls')),
-    path('chatbot/', include('apps.chatbot.urls')),
+    path('chat/', include('apps.chatbot.urls')),
     path('core/', include('apps.core.urls')),
 
     # ERP modules

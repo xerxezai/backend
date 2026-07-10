@@ -48,7 +48,7 @@ class ChatbotMessageView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        return Response({"status": "ready", "endpoint": "chatbot"}, status=status.HTTP_200_OK)
+        return Response({"status": "ready", "endpoint": "chat"}, status=status.HTTP_200_OK)
 
     def post(self, request):
         message = (request.data.get('message') or '').strip()
@@ -59,24 +59,24 @@ class ChatbotMessageView(APIView):
         if len(message) > 2000:
             return Response({'error': 'message is too long'}, status=status.HTTP_400_BAD_REQUEST)
 
-        api_key = getattr(settings, 'ANTHROPIC_API_KEY', None) or os.getenv('ANTHROPIC_API_KEY')
+        api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
         if not api_key:
-            logger.error("ANTHROPIC_API_KEY is not configured")
+            logger.error("GROQ_API_KEY is not configured")
             return Response(
                 {'reply': "I'm temporarily unavailable. Please reach us at info@xerxez.com or via xerxez.com/contact."},
                 status=status.HTTP_200_OK,
             )
 
         try:
-            import anthropic
+            from groq import Groq
         except ImportError:
-            logger.error("anthropic package is not installed")
+            logger.error("groq package is not installed")
             return Response(
                 {'reply': "I'm temporarily unavailable. Please reach us at info@xerxez.com or via xerxez.com/contact."},
                 status=status.HTTP_200_OK,
             )
 
-        api_messages = []
+        api_messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
         for turn in history[-10:]:
             role = turn.get('role')
             content = turn.get('content')
@@ -85,20 +85,17 @@ class ChatbotMessageView(APIView):
         api_messages.append({'role': 'user', 'content': message})
 
         try:
-            client = anthropic.Anthropic(api_key=api_key)
-            result = client.messages.create(
-                model='claude-haiku-4-5-20251001',
+            client = Groq(api_key=api_key)
+            result = client.chat.completions.create(
+                model='llama3-8b-8192',
                 max_tokens=400,
-                system=SYSTEM_PROMPT,
                 messages=api_messages,
             )
-            reply = ''.join(
-                block.text for block in result.content if getattr(block, 'type', None) == 'text'
-            ).strip()
+            reply = (result.choices[0].message.content or '').strip()
             if not reply:
                 reply = "Could you rephrase that? I want to make sure I give you the right answer about XERXEZ."
         except Exception as exc:
-            logger.error("Anthropic API call failed: %s", exc, exc_info=True)
+            logger.error("Groq API call failed: %s", exc, exc_info=True)
             return Response(
                 {'reply': "I'm having trouble responding right now. Please reach us at info@xerxez.com or via xerxez.com/contact."},
                 status=status.HTTP_200_OK,
