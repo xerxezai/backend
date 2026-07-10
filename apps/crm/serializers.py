@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Customer, Contact, Lead, Activity
+from .models import Customer, Contact, Lead, Activity, Deal, CustomerNote
 
 
 def _gen_code(model, prefix, pad=4):
@@ -54,3 +54,40 @@ class ActivitySerializer(serializers.ModelSerializer):
     class Meta:
         model = Activity
         fields = '__all__'
+
+
+class DealSerializer(serializers.ModelSerializer):
+    customer_name = serializers.CharField(source='customer.name', read_only=True, default=None)
+    lead_name = serializers.CharField(source='lead.name', read_only=True, default=None)
+    assigned_to_username = serializers.CharField(source='assigned_to.username', read_only=True, default=None)
+    assigned_to_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Deal
+        fields = '__all__'
+
+    def get_assigned_to_name(self, obj):
+        if not obj.assigned_to:
+            return None
+        return obj.assigned_to.get_full_name() or obj.assigned_to.username
+
+
+class DealStageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Deal
+        fields = ['stage']
+
+
+class CustomerNoteSerializer(serializers.ModelSerializer):
+    created_by_username = serializers.CharField(source='created_by.username', read_only=True, default=None)
+    created_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomerNote
+        fields = '__all__'
+        read_only_fields = ['customer', 'lead', 'created_by']
+
+    def get_created_by_name(self, obj):
+        if not obj.created_by:
+            return None
+        return obj.created_by.get_full_name() or obj.created_by.username

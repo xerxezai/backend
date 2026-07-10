@@ -96,3 +96,79 @@ class Activity(models.Model):
 
     def __str__(self):
         return f'[{self.get_type_display()}] {self.summary}'
+
+
+class Deal(models.Model):
+    STAGE_CHOICES = [
+        ('new', 'New'),
+        ('contacted', 'Contacted'),
+        ('proposal', 'Proposal Sent'),
+        ('negotiation', 'Negotiation'),
+        ('won', 'Won'),
+        ('lost', 'Lost'),
+    ]
+    title = models.CharField(max_length=200)
+    customer = models.ForeignKey(
+        'Customer', on_delete=models.CASCADE,
+        related_name='deals', null=True, blank=True
+    )
+    lead = models.ForeignKey(
+        'Lead', on_delete=models.CASCADE,
+        related_name='deals', null=True, blank=True
+    )
+    value = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0
+    )
+    stage = models.CharField(
+        max_length=20, choices=STAGE_CHOICES, default='new'
+    )
+    assigned_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True, blank=True
+    )
+    expected_close = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'crm_deal'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.title} ({self.get_stage_display()})'
+
+
+class CustomerNote(models.Model):
+    NOTE_TYPE_CHOICES = [
+        ('call', 'Phone Call'),
+        ('meeting', 'Meeting'),
+        ('email', 'Email'),
+        ('follow_up', 'Follow Up'),
+        ('general', 'General Note'),
+    ]
+    customer = models.ForeignKey(
+        'Customer', on_delete=models.CASCADE,
+        related_name='notes', null=True, blank=True
+    )
+    lead = models.ForeignKey(
+        'Lead', on_delete=models.CASCADE,
+        related_name='note_entries', null=True, blank=True
+    )
+    note_type = models.CharField(
+        max_length=20, choices=NOTE_TYPE_CHOICES,
+        default='general'
+    )
+    content = models.TextField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL, null=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'crm_customer_note'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'[{self.get_note_type_display()}] {self.content[:40]}'
