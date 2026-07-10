@@ -1,4 +1,7 @@
+import calendar
+from datetime import timedelta
 from decimal import Decimal
+
 from django.db.models import Sum, Count, Q
 from django.utils import timezone
 from rest_framework.views import APIView
@@ -27,7 +30,35 @@ class ERPDashboardView(APIView):
         month_revenue = Invoice.objects.filter(status='paid', issue_date__gte=month_start).aggregate(t=Sum('total'))['t'] or Decimal('0')
         outstanding = Invoice.objects.filter(status__in=['sent', 'partial', 'overdue']).aggregate(t=Sum('total'))['t'] or Decimal('0')
 
+        # Last 6 months, computed in Python (DB-agnostic) rather than DATE_TRUNC —
+        # each bucket = [1st of month, 1st of next month).
+        monthly_trend = []
+        anchor = month_start
+        for i in range(5, -1, -1):
+            year = anchor.year
+            month = anchor.month - i
+            while month <= 0:
+                month += 12
+                year -= 1
+            bucket_start = anchor.replace(year=year, month=month, day=1)
+            days_in_month = calendar.monthrange(year, month)[1]
+            bucket_end = bucket_start + timedelta(days=days_in_month)
+
+            revenue = Invoice.objects.filter(
+                status='paid', issue_date__gte=bucket_start, issue_date__lt=bucket_end,
+            ).aggregate(t=Sum('total'))['t'] or Decimal('0')
+            new_customers = Customer.objects.filter(
+                created_at__date__gte=bucket_start, created_at__date__lt=bucket_end,
+            ).count()
+
+            monthly_trend.append({
+                'month': bucket_start.strftime('%b'),
+                'revenue': float(revenue),
+                'customers': new_customers,
+            })
+
         return Response({
+            'monthly_trend': monthly_trend,
             'crm': {
                 'total_customers': Customer.objects.filter(is_active=True).count(),
                 'total_leads': Lead.objects.count(),
@@ -64,6 +95,80 @@ class ERPDashboardView(APIView):
                 'pending_commissions': str(Commission.objects.filter(status='pending').aggregate(t=Sum('amount'))['t'] or Decimal('0')),
             },
         })
+
+
+class RecentActivityView(APIView):
+    """Unified recent-activity feed built from real, already-timestamped
+    ERP records (no separate audit-log model needed)."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        items = []
+
+        for lead in Lead.objects.order_by('-created_at')[:5]:
+            items.append({
+                'id': f'lead-{lead.id}',
+                'type': 'crm',
+                'title': f'New lead: {lead.name}',
+                'subtitle': lead.company or (lead.get_source_display() if hasattr(lead, 'get_source_display') else lead.source),
+                'timestamp': lead.created_at,
+            })
+
+        for inv in Invoice.objects.select_related('customer').order_by('-created_at')[:5]:
+            items.append({
+                'id': f'invoice-{inv.id}',
+                'type': 'finance',
+                'title': f'Invoice {inv.number} — {inv.get_status_display()}',
+                'subtitle': inv.customer.name if inv.customer_id else '',
+                'timestamp': inv.created_at,
+            })
+
+        for lr in LeaveRequest.objects.select_related('employee').order_by('-created_at')[:5]:
+            items.append({
+                'id': f'leave-{lr.id}',
+                'type': 'hr',
+                'title': f'{lr.employee.full_name} requested {lr.get_type_display().lower()} leave',
+                'subtitle': lr.get_status_display(),
+                'timestamp': lr.created_at,
+            })
+
+        for po in PurchaseOrder.objects.select_related('vendor').order_by('-created_at')[:5]:
+            items.append({
+                'id': f'po-{po.id}',
+                'type': 'sales',
+                'title': f'Purchase order {po.number} — {po.get_status_display()}',
+                'subtitle': po.vendor.name if po.vendor_id else '',
+                'timestamp': po.created_at,
+            })
+
+        items.sort(key=lambda x: x['timestamp'], reverse=True)
+        items = items[:10]
+
+        now = timezone.now()
+
+        def time_ago(ts):
+            delta = now - ts
+            seconds = delta.total_seconds()
+            if seconds < 60:
+                return 'just now'
+            if seconds < 3600:
+                return f'{int(seconds // 60)} min ago'
+            if seconds < 86400:
+                return f'{int(seconds // 3600)}h ago'
+            days = int(seconds // 86400)
+            return f'{days}d ago'
+
+        data = [{
+            'id': it['id'],
+            'type': it['type'],
+            'title': it['title'],
+            'subtitle': it['subtitle'],
+            'time_ago': time_ago(it['timestamp']),
+            'timestamp': it['timestamp'].isoformat(),
+        } for it in items]
+
+        return Response(data)
 
 
 class SalesReportView(APIView):
