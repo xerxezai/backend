@@ -1,6 +1,7 @@
 import calendar
 from datetime import date
 
+from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
@@ -48,6 +49,14 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter, DjangoFilterBackend]
     search_fields = ['full_name', 'email', 'code']
     filterset_fields = ['department', 'status']
+
+    @action(detail=False, methods=['get'], url_path='linkable-users')
+    def linkable_users(self, request):
+        if not request.user.is_staff:
+            return Response({'detail': 'Admin access required.'}, status=status.HTTP_403_FORBIDDEN)
+        User = get_user_model()
+        users = User.objects.order_by('username').values('id', 'username', 'email', 'first_name', 'last_name')
+        return Response(list(users))
 
     @action(detail=True, methods=['get', 'post'], url_path='documents',
             parser_classes=[MultiPartParser, FormParser])
