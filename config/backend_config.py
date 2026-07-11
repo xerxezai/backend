@@ -272,21 +272,26 @@ class BackendConfig:
         }
     
     def _get_cors_origins(self) -> List[str]:
-        """Get CORS allowed origins based on environment"""
-        env_value = os.getenv('CORS_ALLOWED_ORIGINS')
-        if env_value:
-            return [o.strip() for o in env_value.split(',') if o.strip()]
-        if self.environment == 'production':
-            return [
-                'https://xerxez.com',
-                'https://www.xerxez.com',
-            ]
-        return [
+        """Get CORS allowed origins based on environment.
+
+        The essential production domains and local dev ports are always
+        included, even when CORS_ALLOWED_ORIGINS is set on the host —
+        that env var only ever *adds* origins, it never removes these
+        so a misconfigured/incomplete env var can't lock out the real
+        site or break `npm run dev` testing against the live API.
+        """
+        essentials = [
+            'https://xerxez.com',
+            'https://www.xerxez.com',
             'http://localhost:5173',
             'http://127.0.0.1:5173',
             'http://localhost:3000',
             'http://127.0.0.1:3000',
         ]
+        env_value = os.getenv('CORS_ALLOWED_ORIGINS')
+        env_origins = [o.strip() for o in env_value.split(',') if o.strip()] if env_value else []
+        merged = list(dict.fromkeys(env_origins + essentials))
+        return merged
     
     def _get_allowed_hosts(self) -> List[str]:
         env_value = os.getenv('ALLOWED_HOSTS')
