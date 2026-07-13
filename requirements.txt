@@ -17,6 +17,7 @@ python-dotenv==1.2.2
 pytz==2026.2
 PyYAML==6.0.3
 redis==8.0.0
+resend==2.32.2
 sqlparse==0.5.5
 tzdata==2026.2
 uritemplate==4.2.0

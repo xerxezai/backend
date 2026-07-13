@@ -1,6 +1,6 @@
 import logging
 
-from django.core.mail import send_mail
+import resend
 from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -13,6 +13,29 @@ from .serializers import ContactMessageSerializer
 logger = logging.getLogger(__name__)
 
 ADMIN_EMAIL = getattr(settings, 'CONTACT_ADMIN_EMAIL', 'xerxez.in@gmail.com')
+FROM_EMAIL = getattr(settings, 'CONTACT_FROM_EMAIL', 'info@xerxez.com')
+
+
+def _send_via_resend(*, to, subject, html, text, reply_to=None):
+    """Send one email through Resend. Never raises — a failed email must not break the contact form."""
+    resend.api_key = settings.RESEND_API_KEY
+    if not resend.api_key:
+        logger.error("RESEND_API_KEY is not set — skipping email send (subject=%r, to=%r)", subject, to)
+        return
+    params: resend.Emails.SendParams = {
+        "from": FROM_EMAIL,
+        "to": [to] if isinstance(to, str) else to,
+        "subject": subject,
+        "html": html,
+        "text": text,
+    }
+    if reply_to:
+        params["reply_to"] = reply_to
+    try:
+        resend.Emails.send(params)
+    except Exception as exc:
+        logger.error("Resend email failed (subject=%r, to=%r): %s", subject, to, exc)
+
 
 URGENCY_LABELS = {
     'normal':   'Normal (within 24 h)',
@@ -136,16 +159,16 @@ info@xerxez.com | xerxez.com
   body{{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;padding:0}}
   .wrap{{max-width:580px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;
          box-shadow:0 4px 32px rgba(0,0,0,.10)}}
-  .hdr{{background:linear-gradient(135deg,#1a1208 0%,#0f0a05 100%);padding:36px 40px;text-align:center}}
-  .hdr h1{{color:#C9883A;font-family:Georgia,serif;font-size:22px;margin:0 0 4px}}
-  .hdr p{{color:rgba(255,255,255,.42);font-size:13px;margin:0}}
+  .hdr{{background:#1a1a1a;padding:36px 40px;text-align:center}}
+  .hdr h1{{color:#D4A853;font-family:Georgia,serif;font-size:22px;margin:0 0 4px;letter-spacing:.04em}}
+  .hdr p{{color:rgba(255,255,255,.55);font-size:13px;margin:0}}
   .body{{padding:36px 40px;font-size:14px;color:#333;line-height:1.74}}
-  .detail-box{{background:#fafaf8;border-radius:10px;border:1px solid #f0ede8;
+  .detail-box{{background:#fafaf8;border-radius:10px;border:1px solid #f0ede8;border-left:3px solid #D4A853;
                padding:16px 20px;margin:20px 0;font-size:13px}}
   .detail-box p{{margin:4px 0;color:#5a5650}}
-  .detail-box strong{{color:#141413}}
-  .ftr{{background:#F8F7F4;border-top:1px solid #e8e4de;padding:18px 40px;
-        text-align:center;font-size:12px;color:#9b9690}}
+  .detail-box strong{{color:#1a1a1a}}
+  .ftr{{background:#1a1a1a;border-top:1px solid #2c2c2c;padding:18px 40px;
+        text-align:center;font-size:12px;color:rgba(255,255,255,.45)}}
 </style>
 </head>
 <body>
@@ -161,7 +184,7 @@ info@xerxez.com | xerxez.com
       <p><strong>Priority:</strong> {URGENCY_LABELS.get(m.urgency, m.urgency)}</p>
     </div>
     <p>For urgent matters, call us at
-       <a href="tel:+971567867451" style="color:#C9883A">+971 56 786 7451</a>.</p>
+       <a href="tel:+971567867451" style="color:#D4A853">+971 56 786 7451</a>.</p>
     <p>Best regards,<br><strong>The XERXEZ Team</strong></p>
   </div>
   <div class="ftr">XERXEZ &nbsp;·&nbsp; info@xerxez.com &nbsp;·&nbsp; xerxez.com</div>
@@ -192,39 +215,28 @@ class ContactMessageCreateView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        from_addr = settings.EMAIL_HOST_USER or ADMIN_EMAIL
-
         # 1. Notify XERXEZ team
         urgency = instance.urgency or 'normal'
         prefix  = {'urgent': '[URGENT] ', 'critical': '[CRITICAL] '}.get(urgency, '')
         subject = f"{prefix}New Enquiry: {instance.subject or instance.full_name}"
 
-        try:
-            plain, html = _notification_email(instance)
-            send_mail(
-                subject=subject,
-                message=plain,
-                from_email=from_addr,
-                recipient_list=[ADMIN_EMAIL],
-                html_message=html,
-                fail_silently=True,
-            )
-        except Exception as exc:
-            logger.error("Contact notification email failed: %s", exc)
+        plain, html = _notification_email(instance)
+        _send_via_resend(
+            to=ADMIN_EMAIL,
+            subject=subject,
+            html=html,
+            text=plain,
+            reply_to=instance.email,
+        )
 
         # 2. Auto-reply to enquirer
-        try:
-            ar_plain, ar_html = _auto_reply_email(instance)
-            send_mail(
-                subject="We received your enquiry — XERXEZ",
-                message=ar_plain,
-                from_email=from_addr,
-                recipient_list=[instance.email],
-                html_message=ar_html,
-                fail_silently=True,
-            )
-        except Exception as exc:
-            logger.error("Contact auto-reply email failed: %s", exc)
+        ar_plain, ar_html = _auto_reply_email(instance)
+        _send_via_resend(
+            to=instance.email,
+            subject="Thank you for contacting XERXEZ",
+            html=ar_html,
+            text=ar_plain,
+        )
 
         return Response(
             {
