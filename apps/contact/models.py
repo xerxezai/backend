@@ -44,8 +44,9 @@ class ContactMessage(models.Model):
 
     # AI Training & Consulting
     training_team_size   = models.CharField(max_length=20, blank=True)
-    training_mode        = models.CharField(max_length=20, blank=True)
-    topics_of_interest   = models.CharField(max_length=300, blank=True)
+    training_mode        = models.CharField(max_length=40, blank=True)
+    topics_of_interest   = models.CharField(max_length=500, blank=True)
+    training_duration    = models.CharField(max_length=30, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     is_read    = models.BooleanField(default=False)

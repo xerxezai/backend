@@ -47,6 +47,7 @@ QUALIFICATION_FIELDS = [
     ('Approximate Budget', 'approx_budget'),
     ('Team Size for Training', 'training_team_size'),
     ('Training Mode', 'training_mode'),
+    ('Training Duration', 'training_duration'),
     ('Topics of Interest', 'topics_of_interest'),
     ('Heard Via', 'hear_about_us'),
 ]
