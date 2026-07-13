@@ -17,13 +17,35 @@ class ContactMessage(models.Model):
     subject    = models.CharField(max_length=300, blank=True)
     message    = models.TextField()
 
-    # ERP enquiry qualification fields
+    # Common qualification fields
     country         = models.CharField(max_length=50, blank=True)
+    hear_about_us   = models.CharField(max_length=50, blank=True)
+
+    # AI-Powered ERP
     plan_interest   = models.CharField(max_length=50, blank=True)
     team_size       = models.CharField(max_length=20, blank=True)
     budget_currency = models.CharField(max_length=10, blank=True)
     budget_range    = models.CharField(max_length=50, blank=True)
-    hear_about_us   = models.CharField(max_length=50, blank=True)
+
+    # DevSecOps Pipelines
+    tech_stack      = models.CharField(max_length=300, blank=True)
+    deployment_env  = models.CharField(max_length=20, blank=True)
+    num_developers  = models.CharField(max_length=20, blank=True)
+
+    # Cloud Infrastructure
+    cloud_provider    = models.CharField(max_length=20, blank=True)
+    current_infra     = models.CharField(max_length=300, blank=True)
+    migration_needed  = models.CharField(max_length=10, blank=True)
+
+    # Software Development
+    project_type      = models.CharField(max_length=20, blank=True)
+    project_timeline   = models.CharField(max_length=20, blank=True)
+    approx_budget      = models.CharField(max_length=100, blank=True)
+
+    # AI Training & Consulting
+    training_team_size   = models.CharField(max_length=20, blank=True)
+    training_mode        = models.CharField(max_length=20, blank=True)
+    topics_of_interest   = models.CharField(max_length=300, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     is_read    = models.BooleanField(default=False)

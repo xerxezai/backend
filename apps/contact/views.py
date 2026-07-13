@@ -29,10 +29,38 @@ URGENCY_LABELS = {
     'critical': 'Critical — Immediate',
 }
 
+# (label, model field name) — only fields with a value are shown, so each
+# service's enquiry email only lists the qualification fields relevant to it.
+QUALIFICATION_FIELDS = [
+    ('Country', 'country'),
+    ('Plan Interest', 'plan_interest'),
+    ('Team Size', 'team_size'),
+    ('Budget', 'budget_range'),
+    ('Current Tech Stack', 'tech_stack'),
+    ('Deployment Environment', 'deployment_env'),
+    ('Number of Developers', 'num_developers'),
+    ('Cloud Provider Preference', 'cloud_provider'),
+    ('Current Infrastructure', 'current_infra'),
+    ('Migration Needed', 'migration_needed'),
+    ('Project Type', 'project_type'),
+    ('Project Timeline', 'project_timeline'),
+    ('Approximate Budget', 'approx_budget'),
+    ('Team Size for Training', 'training_team_size'),
+    ('Training Mode', 'training_mode'),
+    ('Topics of Interest', 'topics_of_interest'),
+    ('Heard Via', 'hear_about_us'),
+]
+
+
+def _qualification_rows(m: ContactMessage):
+    return [(label, getattr(m, field)) for label, field in QUALIFICATION_FIELDS if getattr(m, field)]
+
 
 def _notification_email(m: ContactMessage) -> tuple:
     """Build plain-text + HTML notification email for XERXEZ team."""
     urgency_label = URGENCY_LABELS.get(m.urgency, m.urgency)
+    qual_rows = _qualification_rows(m)
+    qual_plain = "\n".join(f"{label:<26}: {value}" for label, value in qual_rows)
 
     plain = f"""
 New Contact Form Submission — XERXEZ Website
@@ -43,13 +71,8 @@ Phone    : {m.phone or '—'}
 Company  : {m.company or '—'}
 Service  : {m.service or '—'}
 Urgency  : {urgency_label}
-Subject  : {m.subject or '—'}
 
-Country       : {m.country or '—'}
-Plan Interest : {m.plan_interest or '—'}
-Team Size     : {m.team_size or '—'}
-Budget        : {m.budget_range or '—'}
-Heard Via     : {m.hear_about_us or '—'}
+{qual_plain}
 
 Message
 -------
@@ -106,12 +129,7 @@ Reply directly to {m.email} to respond.
       <tr><td>Phone</td>   <td>{m.phone or '—'}</td></tr>
       <tr><td>Company</td> <td>{m.company or '—'}</td></tr>
       <tr><td>Service</td> <td>{m.service or '—'}</td></tr>
-      <tr><td>Subject</td> <td>{m.subject or '—'}</td></tr>
-      <tr><td>Country</td> <td>{m.country or '—'}</td></tr>
-      <tr><td>Plan Interest</td> <td>{m.plan_interest or '—'}</td></tr>
-      <tr><td>Team Size</td> <td>{m.team_size or '—'}</td></tr>
-      <tr><td>Budget</td> <td>{m.budget_range or '—'}</td></tr>
-      <tr><td>Heard Via</td> <td>{m.hear_about_us or '—'}</td></tr>
+      {''.join(f'<tr><td>{label}</td> <td>{value}</td></tr>' for label, value in qual_rows)}
     </table>
     <div class="msg">{m.message}</div>
     <div style="text-align:center">
