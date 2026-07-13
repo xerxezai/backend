@@ -27,7 +27,7 @@ class ProductSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
     def create(self, validated_data):
-        if not validated_data.get('code'):
+        if not validated_data.get('code', '').strip():
             validated_data['code'] = _gen_code(Product, 'PROD')
         return super().create(validated_data)
 
