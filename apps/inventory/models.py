@@ -5,6 +5,7 @@ from django.db import models
 class ProductCategory(models.Model):
     code = models.CharField(max_length=20, unique=True)
     name = models.CharField(max_length=120, unique=True)
+    description = models.TextField(blank=True, default='')
     parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='children')
 
     class Meta:
@@ -34,6 +35,7 @@ class Product(models.Model):
     is_digital = models.BooleanField(default=False, help_text='True for digital/SaaS products')
     is_active = models.BooleanField(default=True)
     reorder_level = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    min_stock_level = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     class Meta:
         ordering = ['name']

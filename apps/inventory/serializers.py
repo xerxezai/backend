@@ -13,18 +13,34 @@ def _gen_code(model, prefix, pad=3):
 
 
 class ProductCategorySerializer(serializers.ModelSerializer):
+    code = serializers.CharField(required=False, allow_blank=True)
+
     class Meta:
         model = ProductCategory
         fields = '__all__'
+
+    def create(self, validated_data):
+        if not validated_data.get('code', '').strip():
+            validated_data['code'] = _gen_code(ProductCategory, 'CAT')
+        return super().create(validated_data)
 
 
 class ProductSerializer(serializers.ModelSerializer):
     code = serializers.CharField(required=False, allow_blank=True)
     category_name = serializers.CharField(source='category.name', read_only=True)
+    current_stock = serializers.SerializerMethodField()
+    is_low_stock = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = '__all__'
+
+    def get_current_stock(self, obj):
+        return getattr(obj, 'current_stock', None) or 0
+
+    def get_is_low_stock(self, obj):
+        stock = getattr(obj, 'current_stock', None) or 0
+        return stock < (obj.min_stock_level or 0)
 
     def create(self, validated_data):
         if not validated_data.get('code', '').strip():
