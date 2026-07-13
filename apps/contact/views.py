@@ -1,40 +1,26 @@
 import logging
 
-import resend
 from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 
+from apps.core.email import send_via_resend
 from .models import ContactMessage
 from .serializers import ContactMessageSerializer
 
 logger = logging.getLogger(__name__)
 
 ADMIN_EMAIL = getattr(settings, 'CONTACT_ADMIN_EMAIL', 'xerxez.in@gmail.com')
-FROM_EMAIL = getattr(settings, 'CONTACT_FROM_EMAIL', 'info@xerxez.com')
+# TEMPORARY: xerxez.com is not yet verified in Resend, so sends must use
+# Resend's shared onboarding@resend.dev sender until domain verification
+# completes. Switch back to CONTACT_FROM_EMAIL (info@xerxez.com) once verified.
+FROM_EMAIL = 'onboarding@resend.dev'
 
 
 def _send_via_resend(*, to, subject, html, text, reply_to=None):
-    """Send one email through Resend. Never raises — a failed email must not break the contact form."""
-    resend.api_key = settings.RESEND_API_KEY
-    if not resend.api_key:
-        logger.error("RESEND_API_KEY is not set — skipping email send (subject=%r, to=%r)", subject, to)
-        return
-    params: resend.Emails.SendParams = {
-        "from": FROM_EMAIL,
-        "to": [to] if isinstance(to, str) else to,
-        "subject": subject,
-        "html": html,
-        "text": text,
-    }
-    if reply_to:
-        params["reply_to"] = reply_to
-    try:
-        resend.Emails.send(params)
-    except Exception as exc:
-        logger.error("Resend email failed (subject=%r, to=%r): %s", subject, to, exc)
+    send_via_resend(to=to, subject=subject, html=html, text=text, from_email=FROM_EMAIL, reply_to=reply_to)
 
 
 URGENCY_LABELS = {

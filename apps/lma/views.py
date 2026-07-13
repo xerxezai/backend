@@ -16,6 +16,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
+from apps.core.email import send_via_resend
 from apps.core.sanitize import clean_text
 
 
@@ -86,6 +87,127 @@ def _send_safe(subject, message, recipient_list):
         send_mail(subject, message, from_email, recipient_list, fail_silently=True)
     except Exception as exc:
         logger.warning('LMA email failed: %s', exc)
+
+
+# ── Resend notification emails ───────────────────────────────────────────────
+# TEMPORARY: xerxez.com is not yet verified in Resend, so sends must use
+# Resend's shared onboarding@resend.dev sender until domain verification
+# completes. Switch to CONTACT_FROM_EMAIL (info@xerxez.com) once verified.
+LMA_FROM_EMAIL = 'onboarding@resend.dev'
+LMA_ADMIN_EMAIL = getattr(django_settings, 'CONTACT_ADMIN_EMAIL', 'info@xerxez.com')
+
+_EMAIL_STYLE = """
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;padding:0}
+  .wrap{max-width:580px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;
+        box-shadow:0 4px 32px rgba(0,0,0,.10)}
+  .hdr{background:#1a1a1a;padding:36px 40px;text-align:center}
+  .hdr h1{color:#D4A853;font-family:Georgia,serif;font-size:22px;margin:0 0 4px;letter-spacing:.04em}
+  .hdr p{color:rgba(255,255,255,.55);font-size:13px;margin:0}
+  .body{padding:36px 40px;font-size:14px;color:#333;line-height:1.74}
+  .detail-box{background:#fafaf8;border-radius:10px;border:1px solid #f0ede8;border-left:3px solid #D4A853;
+              padding:16px 20px;margin:20px 0;font-size:13px}
+  .detail-box p{margin:4px 0;color:#5a5650}
+  .detail-box strong{color:#1a1a1a}
+  .ftr{background:#1a1a1a;border-top:1px solid #2c2c2c;padding:18px 40px;
+       text-align:center;font-size:12px;color:rgba(255,255,255,.45)}
+"""
+
+
+def _lma_email_shell(heading: str, body_html: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><style>{_EMAIL_STYLE}</style></head>
+<body>
+<div class="wrap">
+  <div class="hdr"><h1>XERXEZ</h1><p>{heading}</p></div>
+  <div class="body">{body_html}</div>
+  <div class="ftr">XERXEZ Academy &nbsp;·&nbsp; info@xerxez.com &nbsp;·&nbsp; xerxez.com</div>
+</div>
+</body>
+</html>"""
+
+
+def _send_enrollment_emails(student, course):
+    """Welcome email to the student + notification to the XERXEZ team."""
+    first = student.get_full_name() or student.username
+
+    student_plain = (
+        f"Hi {first},\n\n"
+        f"You're enrolled in \"{course.title}\"! Head to your student dashboard to start learning.\n\n"
+        f"Best regards,\nThe XERXEZ Academy Team\ninfo@xerxez.com | xerxez.com"
+    )
+    student_html = _lma_email_shell("Enterprise AI & ERP Solutions", f"""
+      <p>Hi {first},</p>
+      <p>You're enrolled in <strong>{course.title}</strong>! Head to your student dashboard to start learning.</p>
+      <div class="detail-box">
+        <p><strong>Course:</strong> {course.title}</p>
+        <p><strong>Category:</strong> {course.category}</p>
+        <p><strong>Level:</strong> {course.get_level_display()}</p>
+      </div>
+      <p>Best regards,<br><strong>The XERXEZ Academy Team</strong></p>
+    """)
+    send_via_resend(
+        to=student.email, subject=f"Welcome to {course.title}!",
+        html=student_html, text=student_plain, from_email=LMA_FROM_EMAIL,
+    )
+
+    admin_plain = (
+        f"New enrollment on XERXEZ Academy\n"
+        f"Student : {first} ({student.email})\n"
+        f"Course  : {course.title}\n"
+    )
+    admin_html = _lma_email_shell("New Student Enrollment", f"""
+      <p>A new student has enrolled.</p>
+      <div class="detail-box">
+        <p><strong>Student:</strong> {first} ({student.email})</p>
+        <p><strong>Course:</strong> {course.title}</p>
+      </div>
+    """)
+    send_via_resend(
+        to=LMA_ADMIN_EMAIL, subject=f"New Student Enrollment - {course.title}",
+        html=admin_html, text=admin_plain, from_email=LMA_FROM_EMAIL, reply_to=student.email,
+    )
+
+
+def _send_completion_email(student, course):
+    first = student.get_full_name() or student.username
+    plain = (
+        f"Congratulations {first}!\n\n"
+        f"You've completed \"{course.title}\". Your certificate is now available on your student dashboard.\n\n"
+        f"Best regards,\nThe XERXEZ Academy Team\ninfo@xerxez.com | xerxez.com"
+    )
+    html = _lma_email_shell("Course Completed", f"""
+      <p>Congratulations {first}!</p>
+      <p>You've completed <strong>{course.title}</strong>. Your certificate is now available on your student dashboard.</p>
+      <p>Best regards,<br><strong>The XERXEZ Academy Team</strong></p>
+    """)
+    send_via_resend(
+        to=student.email, subject=f"Congratulations! You completed {course.title}",
+        html=html, text=plain, from_email=LMA_FROM_EMAIL,
+    )
+
+
+def _send_instructor_assigned_email(instructor, course):
+    first = instructor.get_full_name() or instructor.username
+    plain = (
+        f"Hi {first},\n\n"
+        f"You've been assigned as the instructor for \"{course.title}\". "
+        f"You can manage it from your instructor dashboard.\n\n"
+        f"Best regards,\nThe XERXEZ Academy Team\ninfo@xerxez.com | xerxez.com"
+    )
+    html = _lma_email_shell("Instructor Assignment", f"""
+      <p>Hi {first},</p>
+      <p>You've been assigned as the instructor for <strong>{course.title}</strong>. You can manage it from your instructor dashboard.</p>
+      <div class="detail-box">
+        <p><strong>Course:</strong> {course.title}</p>
+        <p><strong>Category:</strong> {course.category}</p>
+      </div>
+      <p>Best regards,<br><strong>The XERXEZ Academy Team</strong></p>
+    """)
+    send_via_resend(
+        to=instructor.email, subject=f"You've been assigned to teach {course.title}",
+        html=html, text=plain, from_email=LMA_FROM_EMAIL,
+    )
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
@@ -247,6 +369,7 @@ def enroll(request, course_id):
 
     course.total_students += 1
     course.save(update_fields=['total_students'])
+    _send_enrollment_emails(request.user, course)
 
     return Response(EnrollmentSerializer(enrollment).data, status=201)
 
@@ -266,6 +389,7 @@ def mock_payment(request, course_id):
     if created:
         course.total_students += 1
         course.save(update_fields=['total_students'])
+        _send_enrollment_emails(request.user, course)
 
     return Response({
         'success': True,
@@ -372,6 +496,7 @@ def create_course(request):
     serializer = CourseCreateSerializer(data=data)
     if serializer.is_valid():
         course = serializer.save(instructor=request.user)
+        _send_instructor_assigned_email(request.user, course)
         return Response(CourseListSerializer(course).data, status=201)
     return Response(serializer.errors, status=400)
 
@@ -488,6 +613,7 @@ def lesson_complete(request, lesson_id):
         student=request.user, lesson__module__course=course
     ).count()
 
+    was_completed = enrollment.completed
     new_progress = int((completed_count / max(total_lessons, 1)) * 100)
     enrollment.progress = new_progress
     if new_progress >= 100:
@@ -496,6 +622,9 @@ def lesson_complete(request, lesson_id):
             enrollment.completed_at = timezone.now()
         Certificate.objects.get_or_create(student=request.user, course=course)
     enrollment.save(update_fields=['progress', 'completed', 'completed_at'])
+
+    if enrollment.completed and not was_completed:
+        _send_completion_email(request.user, course)
 
     return Response({
         'completed': True,
