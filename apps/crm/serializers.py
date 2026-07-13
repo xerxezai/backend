@@ -61,6 +61,7 @@ class DealSerializer(serializers.ModelSerializer):
     lead_name = serializers.CharField(source='lead.name', read_only=True, default=None)
     assigned_to_username = serializers.CharField(source='assigned_to.username', read_only=True, default=None)
     assigned_to_name = serializers.SerializerMethodField()
+    outcome = serializers.SerializerMethodField()
 
     class Meta:
         model = Deal
@@ -70,6 +71,15 @@ class DealSerializer(serializers.ModelSerializer):
         if not obj.assigned_to:
             return None
         return obj.assigned_to.get_full_name() or obj.assigned_to.username
+
+    def get_outcome(self, obj):
+        """Derived, not stored — stage is already the single source of truth for won/lost
+        so a separate outcome column would risk drifting out of sync with it."""
+        if obj.stage == 'won':
+            return 'won'
+        if obj.stage == 'lost':
+            return 'lost'
+        return 'pending'
 
 
 class DealStageSerializer(serializers.ModelSerializer):

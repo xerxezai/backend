@@ -4,13 +4,26 @@ from django.db import models
 
 
 class Customer(models.Model):
+    SOURCE = [
+        ('website', 'Website'),
+        ('referral', 'Referral'),
+        ('outbound', 'Outbound'),
+        ('event', 'Event'),
+        ('social', 'Social Media'),
+        ('email', 'Email'),
+        ('other', 'Other'),
+    ]
     code = models.CharField(max_length=20, unique=True, help_text='e.g. CUST-0001')
     name = models.CharField(max_length=200)
     company = models.CharField(max_length=200, blank=True)
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=40, blank=True)
     address = models.TextField(blank=True)
+    city = models.CharField(max_length=100, blank=True)
+    country = models.CharField(max_length=100, blank=True)
     industry = models.CharField(max_length=100, blank=True)
+    source = models.CharField(max_length=20, choices=SOURCE, blank=True, default='')
+    tags = models.JSONField(default=list, blank=True, help_text='e.g. ["VIP","Prospect"]')
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -52,15 +65,23 @@ class Lead(models.Model):
         ('outbound', 'Outbound'),
         ('event', 'Event'),
         ('social', 'Social Media'),
+        ('email', 'Email'),
         ('other', 'Other'),
+    ]
+    SCORE = [
+        ('hot', 'Hot'),
+        ('warm', 'Warm'),
+        ('cold', 'Cold'),
     ]
     name = models.CharField(max_length=200)
     company = models.CharField(max_length=200, blank=True)
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=40, blank=True)
     source = models.CharField(max_length=20, choices=SOURCE, default='website')
+    score = models.CharField(max_length=10, choices=SCORE, default='warm')
     status = models.CharField(max_length=20, choices=STATUS, default='new')
     estimated_value = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    follow_up_date = models.DateField(null=True, blank=True)
     assigned_to = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='crm_leads')
     customer = models.ForeignKey(Customer, null=True, blank=True, on_delete=models.SET_NULL, related_name='leads')
     notes = models.TextField(blank=True)
@@ -80,12 +101,15 @@ class Activity(models.Model):
         ('email', 'Email'),
         ('meeting', 'Meeting'),
         ('demo', 'Demo'),
+        ('task', 'Task'),
         ('note', 'Note'),
     ]
     type = models.CharField(max_length=20, choices=TYPE, default='note')
     summary = models.CharField(max_length=255)
     body = models.TextField(blank=True)
     occurred_at = models.DateTimeField()
+    due_date = models.DateField(null=True, blank=True, help_text='For task-type activities — when it is due')
+    completed = models.BooleanField(default=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     lead = models.ForeignKey(Lead, null=True, blank=True, on_delete=models.CASCADE, related_name='activities')
     customer = models.ForeignKey(Customer, null=True, blank=True, on_delete=models.CASCADE, related_name='activities')
@@ -121,6 +145,9 @@ class Deal(models.Model):
     )
     stage = models.CharField(
         max_length=20, choices=STAGE_CHOICES, default='new'
+    )
+    probability = models.PositiveSmallIntegerField(
+        default=0, help_text='Win probability, 0-100'
     )
     assigned_to = models.ForeignKey(
         settings.AUTH_USER_MODEL,
