@@ -13,7 +13,7 @@ class ProductCategoryAdmin(admin.ModelAdmin):
 class ProductAdmin(admin.ModelAdmin):
     list_display = ('code', 'name', 'category', 'unit', 'cost_price', 'sale_price', 'is_digital', 'is_active')
     list_filter = ('is_active', 'is_digital', 'category')
-    search_fields = ('code', 'name')
+    search_fields = ('code', 'name', 'barcode')
     autocomplete_fields = ('category',)
 
 
