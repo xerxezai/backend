@@ -45,6 +45,12 @@ Service  : {m.service or '—'}
 Urgency  : {urgency_label}
 Subject  : {m.subject or '—'}
 
+Country       : {m.country or '—'}
+Plan Interest : {m.plan_interest or '—'}
+Team Size     : {m.team_size or '—'}
+Budget        : {m.budget_range or '—'}
+Heard Via     : {m.hear_about_us or '—'}
+
 Message
 -------
 {m.message}
@@ -101,6 +107,11 @@ Reply directly to {m.email} to respond.
       <tr><td>Company</td> <td>{m.company or '—'}</td></tr>
       <tr><td>Service</td> <td>{m.service or '—'}</td></tr>
       <tr><td>Subject</td> <td>{m.subject or '—'}</td></tr>
+      <tr><td>Country</td> <td>{m.country or '—'}</td></tr>
+      <tr><td>Plan Interest</td> <td>{m.plan_interest or '—'}</td></tr>
+      <tr><td>Team Size</td> <td>{m.team_size or '—'}</td></tr>
+      <tr><td>Budget</td> <td>{m.budget_range or '—'}</td></tr>
+      <tr><td>Heard Via</td> <td>{m.hear_about_us or '—'}</td></tr>
     </table>
     <div class="msg">{m.message}</div>
     <div style="text-align:center">
