@@ -73,11 +73,12 @@ class Commission(models.Model):
         ('paid', 'Paid'),
     ]
     distributor = models.ForeignKey(Distributor, on_delete=models.CASCADE, related_name='commissions', help_text='The earner')
-    order = models.ForeignKey('sales.SalesOrder', on_delete=models.CASCADE, related_name='mlm_commissions')
+    order = models.ForeignKey('sales.SalesOrder', null=True, blank=True, on_delete=models.CASCADE, related_name='mlm_commissions', help_text='Null for manually-added commissions not tied to a sales order')
     level = models.PositiveSmallIntegerField(help_text='1, 2 or 3 — how many levels above the order\'s originating distributor this earner sits')
     rate = models.DecimalField(max_digits=5, decimal_places=2, help_text='Percentage, e.g. 10.00')
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     status = models.CharField(max_length=10, choices=STATUS, default='pending')
+    notes = models.TextField(blank=True, default='')
     created_date = models.DateTimeField(auto_now_add=True)
 
     class Meta:

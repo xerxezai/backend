@@ -132,7 +132,7 @@ class CommissionViewSet(viewsets.ModelViewSet):
         writer = csv.writer(response)
         writer.writerow(['Commission ID', 'Distributor', 'Order', 'Level', 'Rate', 'Amount', 'Status', 'Date'])
         for c in commissions:
-            writer.writerow([c.id, c.distributor.name, c.order.number, c.level, c.rate, c.amount, c.status, c.created_date])
+            writer.writerow([c.id, c.distributor.name, c.order.number if c.order_id else '', c.level, c.rate, c.amount, c.status, c.created_date])
         return response
 
 

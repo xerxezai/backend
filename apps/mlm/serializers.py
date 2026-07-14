@@ -26,10 +26,26 @@ class CommissionSerializer(serializers.ModelSerializer):
     distributor_name = serializers.CharField(source='distributor.name', read_only=True)
     distributor_id_display = serializers.CharField(source='distributor.distributor_id', read_only=True)
     order_number = serializers.CharField(source='order.number', read_only=True, default=None)
+    # Not required from the client — manually-added commissions (via the Commissions page's
+    # "Add Commission" form) don't collect a rate, it's derived from MLMSettings by level.
+    rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
 
     class Meta:
         model = Commission
         fields = '__all__'
+
+    def create(self, validated_data):
+        if not validated_data.get('rate'):
+            settings_obj = MLMSettings.get_solo()
+            rate_by_level = {1: settings_obj.level1_rate, 2: settings_obj.level2_rate, 3: settings_obj.level3_rate}
+            validated_data['rate'] = rate_by_level.get(validated_data.get('level'), 0)
+        commission = super().create(validated_data)
+        # Matches CommissionViewSet.calculate's behavior: a commission always adds to the
+        # earning distributor's running total, regardless of pending/paid status.
+        distributor = commission.distributor
+        distributor.total_earnings = distributor.total_earnings + commission.amount
+        distributor.save(update_fields=['total_earnings'])
+        return commission
 
 
 class PayoutSerializer(serializers.ModelSerializer):
