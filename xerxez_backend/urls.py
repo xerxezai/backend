@@ -56,6 +56,7 @@ api_patterns = [
     path('tickets/', include('apps.tickets.urls')),
 
     path('purchases/', include('apps.purchases.urls')),
+    path('procurement/', include('apps.procurement.urls')),
     path('logistics/', include('apps.logistics.urls')),
     path('reports/', include('apps.reports.urls')),
 

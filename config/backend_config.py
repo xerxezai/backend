@@ -174,6 +174,10 @@ class BackendConfig:
                     'enabled': True,
                     'path': 'apps.purchases'
                 },
+                'procurement': {
+                    'enabled': True,
+                    'path': 'apps.procurement'
+                },
                 'logistics': {
                     'enabled': True,
                     'path': 'apps.logistics'
