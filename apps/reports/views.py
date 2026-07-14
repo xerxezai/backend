@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 
-from apps.crm.models import Customer, Lead
+from apps.crm.models import Customer, Lead, Deal
 from apps.sales.models import SalesOrder, Quotation
 from apps.invoicing.models import Invoice, Payment
 from apps.inventory.models import Product, StockMovement
@@ -26,9 +26,32 @@ class ERPDashboardView(APIView):
         today = timezone.now().date()
         month_start = today.replace(day=1)
 
-        total_revenue = Invoice.objects.filter(status='paid').aggregate(t=Sum('total'))['t'] or Decimal('0')
-        month_revenue = Invoice.objects.filter(status='paid', issue_date__gte=month_start).aggregate(t=Sum('total'))['t'] or Decimal('0')
-        outstanding = Invoice.objects.filter(status__in=['sent', 'partial', 'overdue']).aggregate(t=Sum('total'))['t'] or Decimal('0')
+        # Total Revenue = paid invoices + won CRM deals (a deal can close without ever
+        # being invoiced separately, e.g. services billed outside the invoicing flow).
+        paid_invoices_total = Invoice.objects.filter(status='paid').aggregate(t=Sum('total'))['t'] or Decimal('0')
+        won_deals_total = Deal.objects.filter(stage='won').aggregate(t=Sum('value'))['t'] or Decimal('0')
+        total_revenue = paid_invoices_total + won_deals_total
+
+        # This Month = paid invoices issued this month + won deals closed this month.
+        # Deal has no dedicated "closed_at" field, so updated_at (bumped whenever the
+        # deal is saved, including the stage/ action's PATCH to 'won') is used as the
+        # closed-date proxy.
+        month_paid_invoices = Invoice.objects.filter(status='paid', issue_date__gte=month_start).aggregate(t=Sum('total'))['t'] or Decimal('0')
+        month_won_deals = Deal.objects.filter(stage='won', updated_at__date__gte=month_start).aggregate(t=Sum('value'))['t'] or Decimal('0')
+        month_revenue = month_paid_invoices + month_won_deals
+
+        # Outstanding = unpaid invoices + accepted quotations that haven't been invoiced
+        # yet (no linked sales order, or a sales order with no invoice against it).
+        unpaid_invoices_total = Invoice.objects.filter(status__in=['sent', 'partial', 'overdue']).aggregate(t=Sum('total'))['t'] or Decimal('0')
+        invoiced_order_ids = set(
+            Invoice.objects.exclude(sales_order__isnull=True).values_list('sales_order_id', flat=True)
+        )
+        uninvoiced_quotations_total = Decimal('0')
+        for q in Quotation.objects.filter(status='accepted').prefetch_related('orders'):
+            order = q.orders.first()
+            if not order or order.id not in invoiced_order_ids:
+                uninvoiced_quotations_total += q.total
+        outstanding = unpaid_invoices_total + uninvoiced_quotations_total
 
         # Last 6 months, computed in Python (DB-agnostic) rather than DATE_TRUNC —
         # each bucket = [1st of month, 1st of next month).
