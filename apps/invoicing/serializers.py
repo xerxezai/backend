@@ -1,6 +1,6 @@
 from django.utils import timezone
 from rest_framework import serializers
-from .models import Invoice, InvoiceItem, Payment
+from .models import Invoice, InvoiceItem, Payment, RecurringInvoice, CreditNote
 
 
 class InvoiceItemSerializer(serializers.ModelSerializer):
@@ -57,3 +57,28 @@ class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payment
         fields = '__all__'
+
+
+class RecurringInvoiceSerializer(serializers.ModelSerializer):
+    customer_name = serializers.CharField(source='customer.name', read_only=True)
+
+    class Meta:
+        model = RecurringInvoice
+        fields = '__all__'
+        read_only_fields = ['last_generated_at']
+
+
+class CreditNoteSerializer(serializers.ModelSerializer):
+    customer_name = serializers.CharField(source='customer.name', read_only=True)
+    invoice_number = serializers.CharField(source='invoice.number', read_only=True)
+
+    class Meta:
+        model = CreditNote
+        fields = '__all__'
+        read_only_fields = ['customer', 'status']
+
+    def create(self, validated_data):
+        # customer is derived from the linked invoice, not entered separately —
+        # keeps it from ever disagreeing with which invoice the credit note is against.
+        validated_data['customer'] = validated_data['invoice'].customer
+        return super().create(validated_data)

@@ -12,8 +12,11 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Invoice, InvoiceItem, Payment
-from .serializers import InvoiceSerializer, InvoiceItemSerializer, PaymentSerializer
+from .models import Invoice, InvoiceItem, Payment, RecurringInvoice, CreditNote
+from .serializers import (
+    InvoiceSerializer, InvoiceItemSerializer, PaymentSerializer,
+    RecurringInvoiceSerializer, CreditNoteSerializer,
+)
 
 
 def sync_invoice_payment_status(invoice: Invoice):
@@ -157,3 +160,132 @@ class InvoicingDashboardView(APIView):
             'outstanding': str(outstanding),
             'overdue_count': overdue_count,
         })
+
+
+class RecurringInvoiceViewSet(viewsets.ModelViewSet):
+    queryset = RecurringInvoice.objects.select_related('customer').all()
+    serializer_class = RecurringInvoiceSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['status', 'frequency', 'customer']
+
+    def list(self, request, *args, **kwargs):
+        # No task scheduler exists in this deployment (Procfile only runs gunicorn), so
+        # "auto-generate when due" is implemented as a lazy check on every list fetch —
+        # any active template whose next_due_date has arrived generates its invoice and
+        # advances past today, so this is idempotent no matter how often the tab is opened.
+        self._generate_due()
+        return super().list(request, *args, **kwargs)
+
+    def _generate_due(self):
+        today = timezone.now().date()
+        for template in RecurringInvoice.objects.filter(status='active', next_due_date__lte=today):
+            template.generate_invoice()
+
+    @action(detail=True, methods=['post'], url_path='generate-now')
+    def generate_now(self, request, pk=None):
+        """Manual trigger — generates immediately regardless of next_due_date, for testing
+        or for billing a customer ahead of schedule."""
+        template = self.get_object()
+        invoice = template.generate_invoice()
+        return Response(
+            {'invoice': InvoiceSerializer(invoice).data, 'recurring': RecurringInvoiceSerializer(template).data},
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=['post'], url_path='toggle-status')
+    def toggle_status(self, request, pk=None):
+        template = self.get_object()
+        template.status = 'paused' if template.status == 'active' else 'active'
+        template.save(update_fields=['status'])
+        return Response(RecurringInvoiceSerializer(template).data)
+
+
+class CreditNoteViewSet(viewsets.ModelViewSet):
+    queryset = CreditNote.objects.select_related('customer', 'invoice').all()
+    serializer_class = CreditNoteSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.SearchFilter, DjangoFilterBackend, filters.OrderingFilter]
+    search_fields = ['number', 'customer__name', 'invoice__number']
+    filterset_fields = ['status', 'customer', 'invoice']
+    ordering_fields = ['date']
+
+    @action(detail=True, methods=['post'], url_path='apply')
+    def apply(self, request, pk=None):
+        credit_note = self.get_object()
+        try:
+            credit_note.apply()
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        credit_note.refresh_from_db()
+        return Response(CreditNoteSerializer(credit_note).data)
+
+
+def _reports_summary():
+    today = timezone.now().date()
+    month_start = today.replace(day=1)
+    year_start = today.replace(month=1, day=1)
+    paid = Invoice.objects.filter(status='paid')
+    return {
+        'total_revenue_month': paid.filter(issue_date__gte=month_start).aggregate(t=Sum('total'))['t'] or Decimal('0'),
+        'total_revenue_year': paid.filter(issue_date__gte=year_start).aggregate(t=Sum('total'))['t'] or Decimal('0'),
+        'tax_collected_month': paid.filter(issue_date__gte=month_start).aggregate(t=Sum('tax'))['t'] or Decimal('0'),
+        'tax_collected_year': paid.filter(issue_date__gte=year_start).aggregate(t=Sum('tax'))['t'] or Decimal('0'),
+    }
+
+
+class InvoicingReportsView(APIView):
+    """Tax collected is GST on invoices that have actually been paid — invoiced-but-unpaid
+    tax hasn't been collected yet, so it's excluded from both the month and year figures."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        today = timezone.now().date()
+        summary = _reports_summary()
+        outstanding_qs = Invoice.objects.filter(status__in=['sent', 'partial', 'overdue']).select_related('customer')
+        overdue_qs = Invoice.objects.filter(due_date__lt=today).exclude(status__in=['paid', 'cancelled']).select_related('customer')
+        return Response({
+            **{k: str(v) for k, v in summary.items()},
+            'outstanding_invoices': InvoiceSerializer(outstanding_qs, many=True).data,
+            'overdue_invoices': InvoiceSerializer(overdue_qs, many=True).data,
+        })
+
+
+class InvoicingReportsExportView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        report_type = request.query_params.get('type', 'all')
+        today = timezone.now().date()
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="invoicing-report-{report_type}-{today}.csv"'
+        writer = csv.writer(response)
+
+        if report_type in ('outstanding', 'all'):
+            writer.writerow(['Outstanding Invoices'])
+            writer.writerow(['Number', 'Customer', 'Issue Date', 'Due Date', 'Status', 'Total', 'Balance'])
+            for inv in Invoice.objects.filter(status__in=['sent', 'partial', 'overdue']).select_related('customer'):
+                writer.writerow([inv.number, inv.customer.name, inv.issue_date, inv.due_date, inv.status, inv.total, inv.balance])
+            writer.writerow([])
+
+        if report_type in ('overdue', 'all'):
+            writer.writerow(['Overdue Invoices'])
+            writer.writerow(['Number', 'Customer', 'Issue Date', 'Due Date', 'Status', 'Total', 'Balance'])
+            for inv in Invoice.objects.filter(due_date__lt=today).exclude(status__in=['paid', 'cancelled']).select_related('customer'):
+                writer.writerow([inv.number, inv.customer.name, inv.issue_date, inv.due_date, inv.status, inv.total, inv.balance])
+            writer.writerow([])
+
+        if report_type in ('summary', 'all'):
+            summary = _reports_summary()
+            writer.writerow(['Summary'])
+            writer.writerow(['Metric', 'Value'])
+            writer.writerow(['Total Revenue (This Month)', summary['total_revenue_month']])
+            writer.writerow(['Total Revenue (This Year)', summary['total_revenue_year']])
+            writer.writerow(['Tax Collected (This Month)', summary['tax_collected_month']])
+            writer.writerow(['Tax Collected (This Year)', summary['tax_collected_year']])
+
+        return response
