@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Quotation, QuotationItem, SalesOrder
+from .models import Quotation, QuotationItem, SalesOrder, SalesOrderItem
 
 
 class QuotationItemSerializer(serializers.ModelSerializer):
@@ -44,7 +44,18 @@ class QuotationSerializer(serializers.ModelSerializer):
         return instance
 
 
+class SalesOrderItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True, default=None)
+
+    class Meta:
+        model = SalesOrderItem
+        fields = ['id', 'order', 'product', 'product_name', 'description', 'quantity', 'unit_price', 'line_total']
+        read_only_fields = ['id', 'line_total']
+        extra_kwargs = {'order': {'required': False}}
+
+
 class SalesOrderSerializer(serializers.ModelSerializer):
+    items = SalesOrderItemSerializer(many=True, required=False)
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     quotation_number = serializers.CharField(source='quotation.number', read_only=True, default=None)
     salesperson_name = serializers.SerializerMethodField()
@@ -54,6 +65,29 @@ class SalesOrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = SalesOrder
         fields = '__all__'
+
+    def create(self, validated_data):
+        items_data = validated_data.pop('items', None)
+        order = SalesOrder.objects.create(**validated_data)
+        if items_data:
+            for item in items_data:
+                SalesOrderItem.objects.create(order=order, **item)
+            order.recalc()
+            order.save()
+        return order
+
+    def update(self, instance, validated_data):
+        items_data = validated_data.pop('items', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if items_data is not None:
+            instance.items.all().delete()
+            for item in items_data:
+                SalesOrderItem.objects.create(order=instance, **item)
+            instance.recalc()
+            instance.save()
+        return instance
 
     def get_salesperson_name(self, obj):
         if not obj.salesperson_id:

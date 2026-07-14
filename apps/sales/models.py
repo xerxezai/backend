@@ -86,3 +86,27 @@ class SalesOrder(models.Model):
 
     def __str__(self):
         return self.number
+
+    def recalc(self):
+        """Recompute total from line items. Only called when items are explicitly
+        managed via the serializer — orders without items keep whatever total was
+        set directly (e.g. quotation conversion), so this never zeroes out legacy data."""
+        self.total = sum((i.line_total for i in self.items.all()), Decimal('0'))
+
+
+class SalesOrderItem(models.Model):
+    order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey('inventory.Product', null=True, blank=True, on_delete=models.SET_NULL, related_name='sales_order_items')
+    description = models.CharField(max_length=255, blank=True, help_text='Free-text line description; defaults to the product name')
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, default=1)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    line_total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    def save(self, *args, **kwargs):
+        if not self.description and self.product_id:
+            self.description = self.product.name
+        self.line_total = (self.quantity or 0) * (self.unit_price or 0)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f'{self.description} x {self.quantity}'
