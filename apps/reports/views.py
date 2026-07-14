@@ -15,7 +15,7 @@ from apps.invoicing.models import Invoice, Payment
 from apps.inventory.models import Product, StockMovement
 from apps.hr.models import Employee, LeaveRequest
 from apps.purchases.models import PurchaseOrder
-from apps.mlm.models import Commission, Earning
+from apps.mlm.models import Commission
 
 
 class ERPDashboardView(APIView):

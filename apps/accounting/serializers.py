@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Account, JournalEntry, JournalLine
+from .models import Account, JournalEntry, JournalLine, Expense, TaxReport
 
 
 class AccountSerializer(serializers.ModelSerializer):
@@ -25,4 +25,17 @@ class JournalEntrySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = JournalEntry
+        fields = '__all__'
+
+
+class ExpenseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Expense
+        fields = '__all__'
+        read_only_fields = ['expense_number']
+
+
+class TaxReportSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TaxReport
         fields = '__all__'

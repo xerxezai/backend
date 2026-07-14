@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Account, JournalEntry, JournalLine
+from .models import Account, JournalEntry, JournalLine, Expense, TaxReport
 
 
 @admin.register(Account)
@@ -23,3 +23,16 @@ class JournalEntryAdmin(admin.ModelAdmin):
     list_filter = ('posted', 'date')
     search_fields = ('number', 'description', 'reference')
     inlines = [JournalLineInline]
+
+
+@admin.register(Expense)
+class ExpenseAdmin(admin.ModelAdmin):
+    list_display = ('expense_number', 'category', 'amount', 'date', 'paid_by', 'status')
+    list_filter = ('status', 'category')
+    search_fields = ('expense_number', 'category', 'description', 'paid_by')
+
+
+@admin.register(TaxReport)
+class TaxReportAdmin(admin.ModelAdmin):
+    list_display = ('period', 'total_revenue', 'total_tax_collected', 'total_tax_paid', 'net_tax')
+    search_fields = ('period',)
