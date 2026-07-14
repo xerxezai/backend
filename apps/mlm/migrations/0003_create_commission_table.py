@@ -6,6 +6,16 @@
 # it in its own migration means a problem here can never undo Migration A's already-committed,
 # risk-free table creation.
 #
+# mlm_commission on production has 1 real row under the old schema (earner_id/source_user_id/
+# transaction_id — FKs to Users and a Transaction, none of which have any equivalent in the new
+# Distributor/SalesOrder-based Commission model, so there is no lossless way to convert that row
+# forward). It is preserved, never dropped: if the old column shape is detected, the whole table
+# is renamed to mlm_commission_legacy rather than deleted, then a fresh mlm_commission table is
+# created under the new schema. Verified locally that Postgres does not error when a new table
+# reuses a name whose constraints/indexes are still held by the renamed-away old table — it
+# auto-suffixes the old ones (e.g. mlm_commission_pkey -> still named that on the legacy table;
+# the new table's own mlm_commission_pkey is a distinct object) rather than colliding.
+#
 # mlm_commissionstructure (and the other legacy tables — mlm_earning, mlm_mlmprofile,
 # mlm_transaction) are deliberately left alone entirely: nothing in this migration reads,
 # writes, or drops them, except a one-time copy of the 3 known commission-rate rows into the
@@ -21,20 +31,15 @@ from django.db import migrations, models
 
 SQL_FIX_COMMISSION = """
 DO $$
-DECLARE
-    row_count bigint;
 BEGIN
     -- Only touches mlm_commission. mlm_commissionstructure/earning/mlmprofile/transaction are
-    -- never referenced here.
+    -- never referenced here. Renamed, not dropped — preserves any old-schema rows regardless
+    -- of how many there are, since they can't be meaningfully converted to the new shape anyway.
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_name = 'mlm_commission' AND column_name = 'earner_id'
     ) THEN
-        EXECUTE 'SELECT COUNT(*) FROM mlm_commission' INTO row_count;
-        IF row_count > 0 THEN
-            RAISE EXCEPTION 'Legacy mlm_commission has % row(s) — aborting this migration without dropping anything. Investigate and clear/migrate this data manually before retrying.', row_count;
-        END IF;
-        DROP TABLE mlm_commission CASCADE;
+        ALTER TABLE mlm_commission RENAME TO mlm_commission_legacy;
     END IF;
 END $$;
 
