@@ -16,6 +16,7 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
 class InvoiceSerializer(serializers.ModelSerializer):
     items = InvoiceItemSerializer(many=True, required=False)
     customer_name = serializers.CharField(source='customer.name', read_only=True)
+    sales_order_number = serializers.CharField(source='sales_order.number', read_only=True, default=None)
     balance = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     is_overdue = serializers.SerializerMethodField()
 

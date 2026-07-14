@@ -1,3 +1,4 @@
+from decimal import Decimal
 from rest_framework import serializers
 from .models import Quotation, QuotationItem, SalesOrder, SalesOrderItem
 
@@ -61,6 +62,8 @@ class SalesOrderSerializer(serializers.ModelSerializer):
     salesperson_name = serializers.SerializerMethodField()
     distributor_name = serializers.SerializerMethodField()
     invoice_number = serializers.SerializerMethodField()
+    invoice_status = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
 
     class Meta:
         model = SalesOrder
@@ -102,3 +105,24 @@ class SalesOrderSerializer(serializers.ModelSerializer):
     def get_invoice_number(self, obj):
         invoice = obj.invoices.order_by('-issue_date').first()
         return invoice.number if invoice else None
+
+    def get_invoice_status(self, obj):
+        """Derived from invoices linked to this order — never stored, so it can't drift out
+        of sync with the invoicing app's own Invoice.total (mirrors sync_invoice_payment_status's
+        same reasoning for amount_paid/status on Invoice)."""
+        invoiced = sum((inv.total for inv in obj.invoices.all()), Decimal('0'))
+        if invoiced <= 0:
+            return 'not_invoiced'
+        if invoiced < (obj.total or Decimal('0')):
+            return 'partial'
+        return 'fully_invoiced'
+
+    def get_payment_status(self, obj):
+        invoices = list(obj.invoices.all())
+        invoiced = sum((inv.total for inv in invoices), Decimal('0'))
+        paid = sum((inv.amount_paid for inv in invoices), Decimal('0'))
+        if paid <= 0:
+            return 'unpaid'
+        if paid < invoiced:
+            return 'partial'
+        return 'paid'

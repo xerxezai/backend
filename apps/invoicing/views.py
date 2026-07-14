@@ -43,6 +43,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     filterset_fields = {
         'status': ['exact'],
         'customer': ['exact'],
+        'sales_order': ['exact', 'isnull'],
         'issue_date': ['exact', 'gte', 'lte'],
         'due_date': ['exact', 'gte', 'lte'],
     }
@@ -104,6 +105,9 @@ class PaymentViewSet(viewsets.ModelViewSet):
     search_fields = ['invoice__number', 'invoice__customer__name', 'reference']
     filterset_fields = {
         'invoice': ['exact'],
+        'invoice__customer': ['exact'],
+        'invoice__status': ['exact'],
+        'invoice__sales_order': ['exact', 'isnull'],
         'method': ['exact'],
         'paid_at': ['exact', 'gte', 'lte'],
     }
