@@ -2,22 +2,9 @@
 # every installed app's live model state, not just the target app, so running it while
 # apps.mlm.models was mid-edit by a parallel workstream triggered unrelated interactive
 # rename prompts for mlm.Commission. Writing this migration directly avoids that race.
-#
-# shipment_number is added in three steps (nullable -> backfill -> not-null) rather than a
-# single AddField with a blank default, because Shipment is an existing, previously-linked
-# table that may already have real rows on production — a single-step AddField with
-# default='' would try to backfill every existing row with the same value, which violates
-# the unique constraint the instant there's more than one row.
 import django.db.models.deletion
 import django.utils.timezone
 from django.db import migrations, models
-
-
-def backfill_shipment_numbers(apps, schema_editor):
-    Shipment = apps.get_model('logistics', 'Shipment')
-    for shipment in Shipment.objects.order_by('id'):
-        shipment.shipment_number = f'SHP-{shipment.id:03d}'
-        shipment.save(update_fields=['shipment_number'])
 
 
 class Migration(migrations.Migration):
@@ -30,13 +17,8 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='shipment',
             name='shipment_number',
-            field=models.CharField(help_text='e.g. SHP-001', max_length=20, null=True, unique=True),
-        ),
-        migrations.RunPython(backfill_shipment_numbers, migrations.RunPython.noop),
-        migrations.AlterField(
-            model_name='shipment',
-            name='shipment_number',
-            field=models.CharField(help_text='e.g. SHP-001', max_length=20, unique=True),
+            field=models.CharField(default='', help_text='e.g. SHP-001', max_length=20, unique=True),
+            preserve_default=False,
         ),
         migrations.AddField(
             model_name='shipment',
