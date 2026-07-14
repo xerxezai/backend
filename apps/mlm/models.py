@@ -2,6 +2,7 @@
 from decimal import Decimal
 from django.conf import settings
 from django.db import models
+from django.db.models import F
 from django.utils import timezone
 
 
@@ -86,6 +87,39 @@ class Commission(models.Model):
 
     def __str__(self):
         return f'{self.distributor} earned {self.amount} (L{self.level}) from {self.order}'
+
+
+def generate_commission_for_order(order):
+    """Auto-generates a Pending commission for order.distributor — the MLM distributor
+    assigned as a SalesOrder's salesperson — based on that distributor's own level rate from
+    MLMSettings. Called from apps.sales.views whenever a SalesOrder is saved in 'confirmed'
+    status with a distributor assigned (order in which those two things become true doesn't
+    matter — it's called after every save and is idempotent either way).
+
+    Idempotent by design: does nothing if there's no distributor assigned, and does nothing if
+    a commission already exists for this exact order+distributor pair, so it's safe to call on
+    every save rather than needing precise 'did status just transition to confirmed' tracking
+    across the three different code paths that can change a SalesOrder (create, update, and the
+    dedicated status action)."""
+    if not order.distributor_id:
+        return None
+    if Commission.objects.filter(order_id=order.id, distributor_id=order.distributor_id).exists():
+        return None
+
+    distributor = order.distributor
+    settings_obj = MLMSettings.get_solo()
+    rate_by_level = {1: settings_obj.level1_rate, 2: settings_obj.level2_rate, 3: settings_obj.level3_rate}
+    rate = rate_by_level.get(distributor.level, Decimal('0'))
+    amount = (order.total or Decimal('0')) * (rate / Decimal('100'))
+
+    commission = Commission.objects.create(
+        distributor=distributor, order=order, level=distributor.level, rate=rate, amount=amount, status='pending',
+    )
+    Distributor.objects.filter(pk=distributor.pk).update(
+        total_earnings=F('total_earnings') + amount,
+        total_sales=F('total_sales') + (order.total or Decimal('0')),
+    )
+    return commission
 
 
 class Payout(models.Model):

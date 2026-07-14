@@ -13,6 +13,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import Quotation, QuotationItem, SalesOrder
 from .serializers import QuotationSerializer, QuotationItemSerializer, SalesOrderSerializer
+from apps.mlm.models import Distributor, generate_commission_for_order
 
 
 class QuotationViewSet(viewsets.ModelViewSet):
@@ -77,14 +78,28 @@ class QuotationItemViewSet(viewsets.ModelViewSet):
 
 
 class SalesOrderViewSet(viewsets.ModelViewSet):
-    queryset = SalesOrder.objects.select_related('customer', 'quotation', 'salesperson').all()
+    queryset = SalesOrder.objects.select_related('customer', 'quotation', 'salesperson', 'distributor').all()
     serializer_class = SalesOrderSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, DjangoFilterBackend, filters.OrderingFilter]
     search_fields = ['number', 'customer__name']
-    filterset_fields = ['status', 'customer', 'salesperson']
+    filterset_fields = ['status', 'customer', 'salesperson', 'distributor']
     ordering_fields = ['order_date', 'total']
+
+    def _maybe_generate_commission(self, order):
+        """Fires after every create/update/status-change — safe and idempotent regardless of
+        which specific field changed, see generate_commission_for_order's docstring."""
+        if order.status == 'confirmed' and order.distributor_id:
+            generate_commission_for_order(order)
+
+    def perform_create(self, serializer):
+        order = serializer.save()
+        self._maybe_generate_commission(order)
+
+    def perform_update(self, serializer):
+        order = serializer.save()
+        self._maybe_generate_commission(order)
 
     @action(detail=True, methods=['put', 'patch'], url_path='status')
     def update_status(self, request, pk=None):
@@ -98,17 +113,26 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
             )
         order.status = new_status
         order.save(update_fields=['status'])
+        self._maybe_generate_commission(order)
         return Response(SalesOrderSerializer(order).data)
 
     @action(detail=False, methods=['get'], url_path='salespeople')
     def salespeople(self, request):
-        """Lightweight user list for the 'Assign salesperson' dropdown — any authenticated user may read it."""
+        """Combined list for the 'Assign Salesperson' dropdown: regular Users and active MLM
+        Distributors, tagged by `type` so the frontend can set the right FK (salesperson vs
+        distributor) on the order. Any authenticated user may read it."""
         User = get_user_model()
         users = User.objects.order_by('username').values('id', 'username', 'first_name', 'last_name')
-        return Response([
-            {'id': u['id'], 'name': (f"{u['first_name']} {u['last_name']}".strip() or u['username'])}
+        people = [
+            {'type': 'user', 'id': u['id'], 'name': (f"{u['first_name']} {u['last_name']}".strip() or u['username'])}
             for u in users
-        ])
+        ]
+        distributors = Distributor.objects.filter(status='active').order_by('name')
+        people += [
+            {'type': 'distributor', 'id': d.id, 'name': f'{d.name} ({d.distributor_id})'}
+            for d in distributors
+        ]
+        return Response(people)
 
 
 class SalesDashboardView(APIView):

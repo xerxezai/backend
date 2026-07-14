@@ -71,6 +71,10 @@ class SalesOrder(models.Model):
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, related_name='sales_orders')
     quotation = models.ForeignKey(Quotation, null=True, blank=True, on_delete=models.SET_NULL, related_name='orders')
     salesperson = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='sales_orders_assigned')
+    distributor = models.ForeignKey(
+        'mlm.Distributor', null=True, blank=True, on_delete=models.SET_NULL, related_name='sales_orders_as_salesperson',
+        help_text='MLM distributor credited as salesperson for this order, if any — mutually exclusive with salesperson in the UI',
+    )
     order_date = models.DateField()
     status = models.CharField(max_length=20, choices=STATUS, default='open')
     total = models.DecimalField(max_digits=14, decimal_places=2, default=0)

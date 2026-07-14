@@ -48,6 +48,7 @@ class SalesOrderSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     quotation_number = serializers.CharField(source='quotation.number', read_only=True, default=None)
     salesperson_name = serializers.SerializerMethodField()
+    distributor_name = serializers.SerializerMethodField()
     invoice_number = serializers.SerializerMethodField()
 
     class Meta:
@@ -58,6 +59,11 @@ class SalesOrderSerializer(serializers.ModelSerializer):
         if not obj.salesperson_id:
             return None
         return obj.salesperson.get_full_name() or obj.salesperson.username
+
+    def get_distributor_name(self, obj):
+        if not obj.distributor_id:
+            return None
+        return f'{obj.distributor.name} ({obj.distributor.distributor_id})'
 
     def get_invoice_number(self, obj):
         invoice = obj.invoices.order_by('-issue_date').first()
