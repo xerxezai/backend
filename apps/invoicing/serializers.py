@@ -52,6 +52,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
 class PaymentSerializer(serializers.ModelSerializer):
     invoice_number = serializers.CharField(source='invoice.number', read_only=True)
+    customer_name = serializers.CharField(source='invoice.customer.name', read_only=True, default=None)
 
     class Meta:
         model = Payment
