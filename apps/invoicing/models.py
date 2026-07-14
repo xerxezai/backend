@@ -5,6 +5,8 @@ from django.db import models
 from apps.crm.models import Customer
 from apps.sales.models import SalesOrder
 
+GST_RATE = Decimal('0.18')
+
 
 class Invoice(models.Model):
     STATUS = [
@@ -38,15 +40,25 @@ class Invoice(models.Model):
     def balance(self):
         return (self.total or Decimal('0')) - (self.amount_paid or Decimal('0'))
 
+    def recalc(self):
+        """Recompute subtotal/tax/total from line items. Tax is 18% GST on the subtotal."""
+        sub = sum((i.line_total for i in self.items.all()), Decimal('0'))
+        self.subtotal = sub
+        self.tax = (sub * GST_RATE).quantize(Decimal('0.01'))
+        self.total = self.subtotal + self.tax
+
 
 class InvoiceItem(models.Model):
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='items')
-    description = models.CharField(max_length=255)
+    product = models.ForeignKey('inventory.Product', null=True, blank=True, on_delete=models.SET_NULL, related_name='invoice_items')
+    description = models.CharField(max_length=255, blank=True, help_text='Free-text line description; defaults to the product name')
     quantity = models.DecimalField(max_digits=12, decimal_places=2, default=1)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     line_total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
 
     def save(self, *args, **kwargs):
+        if not self.description and self.product_id:
+            self.description = self.product.name
         self.line_total = (self.quantity or 0) * (self.unit_price or 0)
         super().save(*args, **kwargs)
 
@@ -56,6 +68,7 @@ class Payment(models.Model):
         ('cash', 'Cash'),
         ('bank', 'Bank Transfer'),
         ('card', 'Card'),
+        ('upi', 'UPI'),
         ('cheque', 'Cheque'),
         ('online', 'Online Gateway'),
         ('other', 'Other'),
