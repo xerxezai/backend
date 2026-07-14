@@ -8,21 +8,19 @@ class Migration(migrations.Migration):
 
     initial = True
 
+    # Deliberately depends on AUTH_USER_MODEL only, matching exactly what production already
+    # has recorded for 'mlm.0001_initial' from before this app's schema was rewritten (see
+    # project notes / feedback_migration_rewrites_are_dangerous). The Commission model — which
+    # needs a dependency on 'sales' for its order FK — lives in 0002 instead, where declaring a
+    # new dependency is safe: 0002 is a migration name that was never previously applied
+    # anywhere, so it can't create the kind of history-order conflict a same-named-but-rewritten
+    # 0001 did (InconsistentMigrationHistory: mlm.0001 recorded as applied before a 'sales'
+    # migration that didn't exist yet at that time).
     dependencies = [
-        ('sales', '0002_quotationitem_product_salesorder_salesperson_and_more'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
-        # This app is being fully replaced (see project notes): the old mlm_commission table
-        # (from the previous MLMProfile/CommissionStructure/Transaction/Commission/Earning
-        # design) is being superseded by a new, incompatible Commission model that reuses the
-        # same table name. Verified empty (0 rows) before this migration was written, so it's
-        # safe to drop here as part of the standard migration flow rather than out-of-band SQL.
-        migrations.RunSQL(
-            sql="DROP TABLE IF EXISTS mlm_commission CASCADE;",
-            reverse_sql=migrations.RunSQL.noop,
-        ),
         migrations.CreateModel(
             name='Distributor',
             fields=[
@@ -71,22 +69,6 @@ class Migration(migrations.Migration):
             ],
             options={
                 'ordering': ['-payout_date', '-id'],
-            },
-        ),
-        migrations.CreateModel(
-            name='Commission',
-            fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('level', models.PositiveSmallIntegerField(help_text="1, 2 or 3 — how many levels above the order's originating distributor this earner sits")),
-                ('rate', models.DecimalField(decimal_places=2, help_text='Percentage, e.g. 10.00', max_digits=5)),
-                ('amount', models.DecimalField(decimal_places=2, max_digits=14)),
-                ('status', models.CharField(choices=[('pending', 'Pending'), ('paid', 'Paid')], default='pending', max_length=10)),
-                ('created_date', models.DateTimeField(auto_now_add=True)),
-                ('distributor', models.ForeignKey(help_text='The earner', on_delete=django.db.models.deletion.CASCADE, related_name='commissions', to='mlm.distributor')),
-                ('order', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='mlm_commissions', to='sales.salesorder')),
-            ],
-            options={
-                'ordering': ['-created_date'],
             },
         ),
     ]

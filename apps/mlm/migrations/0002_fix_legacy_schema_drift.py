@@ -1,19 +1,32 @@
-# Fixes a production migration-history drift: mlm/0001_initial.py was rewritten in place
-# (old User-referral design -> new Distributor/Commission/Payout/MLMSettings design), but any
-# database that had already recorded 'mlm.0001_initial' as applied under the OLD content skips
-# re-running it (Django tracks migrations by name, not content) — leaving old tables in place
-# (or, for the brand-new Distributor/Payout/MLMSettings tables, never creating them at all) while
-# the application code already expects the new schema. This is a database-only fix: Django's
-# migration STATE already matches the new models (from 0001_initial), so only the real tables
-# need to catch up — hence SeparateDatabaseAndState with no state_operations.
+# Two things, both a consequence of rewriting mlm/0001_initial.py's content in place for the
+# old-schema -> new-schema replacement (see feedback_migration_rewrites_are_dangerous):
+#
+# 1. Schema drift: any database (e.g. production) that already recorded 'mlm.0001_initial' as
+#    applied under the OLD content skips re-running it (Django tracks migrations by name, not
+#    content) — leaving old tables in place (or, for the brand-new Distributor/Payout/
+#    MLMSettings tables, never creating them at all) while the application code already expects
+#    the new schema. This is a database-only fix: Django's migration STATE for those three
+#    tables already matches the new models (from 0001_initial), so only the real tables need to
+#    catch up.
+#
+# 2. The Commission model lives here instead of 0001 specifically because its `order` FK needs
+#    a dependency on 'sales' — and 0001_initial already has a real, years-old applied timestamp
+#    on production, from before any 'sales' migration this new dependency would point at
+#    existed. Declaring that dependency on 0001 caused Django's check_consistent_history to
+#    reject the whole migrate run outright (mlm.0001 recorded as applied *before* a 'sales'
+#    migration it now claims to depend on). 0002 is a migration name that was never previously
+#    applied anywhere, so it can carry the new dependency safely.
 #
 # Idempotent and safe to run on any environment:
 #   - A DB that already has the new schema (e.g. local dev, already fixed manually): every
 #     statement is a documented no-op (DROP ... IF EXISTS, CREATE ... IF NOT EXISTS, the
 #     mlm_commission rebuild only fires if the OLD 'earner_id' column is still present).
 #   - A DB still on the old schema (production): drops the old, now-unreferenced tables and
-#     creates the new ones so they match exactly what `sqlmigrate mlm 0001` describes.
-from django.db import migrations
+#     creates the new ones so they match exactly what `sqlmigrate mlm 0001` + this file
+#     describe.
+import django.db.models.deletion
+from django.db import migrations, models
+
 
 SQL_FIX = """
 DO $$
@@ -23,8 +36,7 @@ DECLARE
 BEGIN
     -- Safety guard: never drop a legacy table that actually has rows in it. If any of
     -- these hold real data, abort the whole migration loudly (deploy fails, nothing is
-    -- touched) instead of silently discarding it — this environment's data was never
-    -- confirmed empty the way local dev was.
+    -- touched) instead of silently discarding it.
     FOREACH tbl IN ARRAY ARRAY['mlm_commissionstructure', 'mlm_earning', 'mlm_mlmprofile', 'mlm_transaction'] LOOP
         IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = tbl) THEN
             EXECUTE format('SELECT COUNT(*) FROM %I', tbl) INTO row_count;
@@ -114,10 +126,31 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('mlm', '0001_initial'),
+        ('sales', '0002_quotationitem_product_salesorder_salesperson_and_more'),
     ]
 
     operations = [
         migrations.SeparateDatabaseAndState(
-            database_operations=[migrations.RunSQL(SQL_FIX, reverse_sql=migrations.RunSQL.noop)],
+            state_operations=[
+                migrations.CreateModel(
+                    name='Commission',
+                    fields=[
+                        ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                        ('level', models.PositiveSmallIntegerField(help_text="1, 2 or 3 — how many levels above the order's originating distributor this earner sits")),
+                        ('rate', models.DecimalField(decimal_places=2, help_text='Percentage, e.g. 10.00', max_digits=5)),
+                        ('amount', models.DecimalField(decimal_places=2, max_digits=14)),
+                        ('status', models.CharField(choices=[('pending', 'Pending'), ('paid', 'Paid')], default='pending', max_length=10)),
+                        ('created_date', models.DateTimeField(auto_now_add=True)),
+                        ('distributor', models.ForeignKey(help_text='The earner', on_delete=django.db.models.deletion.CASCADE, related_name='commissions', to='mlm.distributor')),
+                        ('order', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='mlm_commissions', to='sales.salesorder')),
+                    ],
+                    options={
+                        'ordering': ['-created_date'],
+                    },
+                ),
+            ],
+            database_operations=[
+                migrations.RunSQL(SQL_FIX, reverse_sql=migrations.RunSQL.noop),
+            ],
         ),
     ]
