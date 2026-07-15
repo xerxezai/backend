@@ -29,7 +29,11 @@ class Shipment(models.Model):
     customer = models.ForeignKey(Customer, on_delete=models.PROTECT, related_name='shipments')
     carrier = models.CharField(max_length=120, blank=True)
     status = models.CharField(max_length=20, choices=STATUS, default='pending')
-    origin = models.CharField(max_length=255, blank=True)
+    origin = models.CharField(max_length=255, blank=True, help_text='Free-text origin label — auto-filled from origin_warehouse when one is selected')
+    origin_warehouse = models.ForeignKey(
+        'inventory.Warehouse', null=True, blank=True, on_delete=models.SET_NULL, related_name='shipments',
+        help_text='Inventory warehouse this shipment originates from, if any',
+    )
     destination = models.CharField(max_length=255)
     dispatched_at = models.DateTimeField(null=True, blank=True)
     estimated_delivery = models.DateField(null=True, blank=True)

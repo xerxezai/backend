@@ -68,6 +68,7 @@ class GoodsReceiptSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source='purchase_order.supplier.name', read_only=True)
     po_number = serializers.CharField(source='purchase_order.po_number', read_only=True)
     received_by_name = serializers.CharField(source='received_by.get_full_name', read_only=True, default=None)
+    warehouse_name = serializers.CharField(source='warehouse.name', read_only=True, default=None)
 
     class Meta:
         model = GoodsReceipt

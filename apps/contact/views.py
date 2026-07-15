@@ -7,6 +7,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny
 
 from apps.core.email import send_via_resend
+from apps.crm.models import Lead
 from .models import ContactMessage
 from .serializers import ContactMessageSerializer
 
@@ -253,6 +254,21 @@ class ContactMessageCreateView(APIView):
             html=ar_html,
             text=ar_plain,
         )
+
+        # 3. Auto-create a CRM lead so sales can follow up — best-effort, a CRM hiccup
+        # must never block the visitor's enquiry from being saved and acknowledged.
+        try:
+            Lead.objects.create(
+                name=instance.full_name,
+                company=instance.company or '',
+                email=instance.email,
+                phone=instance.phone or '',
+                source='website',
+                status='new',
+                notes=f"{instance.subject or 'Website enquiry'}\n\n{instance.message}",
+            )
+        except Exception as exc:
+            logger.error("CRM lead creation failed: %s", exc, exc_info=True)
 
         return Response(
             {

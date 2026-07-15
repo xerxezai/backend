@@ -2,7 +2,7 @@
 from decimal import Decimal
 from django.conf import settings
 from django.db import models
-from django.db.models import F
+from django.db.models import Sum
 from django.utils import timezone
 
 
@@ -89,21 +89,29 @@ class Commission(models.Model):
         return f'{self.distributor} earned {self.amount} (L{self.level}) from {self.order}'
 
 
+def _recalc_distributor_totals(distributor):
+    """Recomputes total_sales/total_earnings from the distributor's actual commission and
+    order records, rather than incrementing them — so a later change to an order's total
+    (e.g. editing its line items) can't leave these denormalized figures stale or drifted."""
+    earnings = Commission.objects.filter(distributor=distributor).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+    sales = distributor.sales_orders_as_salesperson.filter(status='confirmed').aggregate(t=Sum('total'))['t'] or Decimal('0')
+    Distributor.objects.filter(pk=distributor.pk).update(total_earnings=earnings, total_sales=sales)
+
+
 def generate_commission_for_order(order):
-    """Auto-generates a Pending commission for order.distributor — the MLM distributor
+    """Creates or updates the Pending commission for order.distributor — the MLM distributor
     assigned as a SalesOrder's salesperson — based on that distributor's own level rate from
     MLMSettings. Called from apps.sales.views whenever a SalesOrder is saved in 'confirmed'
-    status with a distributor assigned (order in which those two things become true doesn't
-    matter — it's called after every save and is idempotent either way).
+    status with a distributor assigned (it's called after every save rather than needing precise
+    'did status/total just change' tracking across the three code paths that can change a
+    SalesOrder — create, update, and the dedicated status action).
 
-    Idempotent by design: does nothing if there's no distributor assigned, and does nothing if
-    a commission already exists for this exact order+distributor pair, so it's safe to call on
-    every save rather than needing precise 'did status just transition to confirmed' tracking
-    across the three different code paths that can change a SalesOrder (create, update, and the
-    dedicated status action)."""
+    A zero (or negative) order total never gets a commission: an existing zero-amount pending
+    commission is removed, and no new one is created. Otherwise, if a commission already exists
+    for this order+distributor pair, its rate/amount are refreshed to match the order's current
+    total (so editing line items after confirmation keeps the commission correct) — unless it's
+    already been paid, which is left untouched since it's settled."""
     if not order.distributor_id:
-        return None
-    if Commission.objects.filter(order_id=order.id, distributor_id=order.distributor_id).exists():
         return None
 
     distributor = order.distributor
@@ -112,13 +120,28 @@ def generate_commission_for_order(order):
     rate = rate_by_level.get(distributor.level, Decimal('0'))
     amount = (order.total or Decimal('0')) * (rate / Decimal('100'))
 
+    existing = Commission.objects.filter(order_id=order.id, distributor_id=order.distributor_id).first()
+
+    if amount <= 0:
+        if existing and existing.status != 'paid':
+            existing.delete()
+            _recalc_distributor_totals(distributor)
+        return None
+
+    if existing:
+        if existing.status == 'paid':
+            return existing
+        if existing.rate != rate or existing.amount != amount:
+            existing.rate = rate
+            existing.amount = amount
+            existing.save(update_fields=['rate', 'amount'])
+            _recalc_distributor_totals(distributor)
+        return existing
+
     commission = Commission.objects.create(
         distributor=distributor, order=order, level=distributor.level, rate=rate, amount=amount, status='pending',
     )
-    Distributor.objects.filter(pk=distributor.pk).update(
-        total_earnings=F('total_earnings') + amount,
-        total_sales=F('total_sales') + (order.total or Decimal('0')),
-    )
+    _recalc_distributor_totals(distributor)
     return commission
 
 

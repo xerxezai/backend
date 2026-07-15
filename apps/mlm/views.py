@@ -101,15 +101,17 @@ class CommissionViewSet(viewsets.ModelViewSet):
         while current is not None and level <= 3:
             rate = rates[level]
             amount = (order.total or Decimal('0')) * (rate / Decimal('100'))
-            commission = Commission.objects.create(
-                distributor=current, order=order, level=level, rate=rate, amount=amount, status='pending',
-            )
-            created.append(commission)
-            Distributor.objects.filter(pk=current.pk).update(total_earnings=current.total_earnings + amount)
+            if amount > 0:
+                commission = Commission.objects.create(
+                    distributor=current, order=order, level=level, rate=rate, amount=amount, status='pending',
+                )
+                created.append(commission)
+                Distributor.objects.filter(pk=current.pk).update(total_earnings=current.total_earnings + amount)
             current = current.sponsor
             level += 1
 
-        Distributor.objects.filter(pk=origin.pk).update(total_sales=origin.total_sales + (order.total or Decimal('0')))
+        if order.total and order.total > 0:
+            Distributor.objects.filter(pk=origin.pk).update(total_sales=origin.total_sales + order.total)
 
         return Response({
             'count': len(created),

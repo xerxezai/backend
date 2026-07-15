@@ -21,18 +21,22 @@ from .serializers import (
 )
 
 
-def _create_goods_receipt(*, purchase_order, received_date, notes, items_data, user):
+def _create_goods_receipt(*, purchase_order, received_date, notes, items_data, user, warehouse_id=None):
     """Shared by GoodsReceiptViewSet.create and PurchaseOrder.receive — creates the receipt
     + its line items, books an inbound StockMovement per item (so inventory stays the single
     source of truth for stock, same as every other module) and marks the PO received."""
+    warehouse = Warehouse.objects.filter(pk=warehouse_id).first() if warehouse_id else None
+    if not warehouse:
+        warehouse = Warehouse.objects.filter(is_active=True).first() or Warehouse.objects.first()
+
     receipt = GoodsReceipt.objects.create(
         receipt_number=next_number(GoodsReceipt, 'receipt_number', 'GR'),
         purchase_order=purchase_order,
+        warehouse=warehouse,
         received_date=received_date or timezone.now().date(),
         received_by=user if user and getattr(user, 'is_authenticated', False) else None,
         notes=notes or '',
     )
-    warehouse = Warehouse.objects.filter(is_active=True).first() or Warehouse.objects.first()
     now = timezone.now()
     product_ids = [i.get('product') for i in items_data if i.get('product')]
     products = {p.id: p for p in Product.objects.filter(id__in=product_ids)}
@@ -120,6 +124,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             notes=request.data.get('notes', ''),
             items_data=items_data,
             user=request.user,
+            warehouse_id=request.data.get('warehouse'),
         )
         return Response(GoodsReceiptSerializer(receipt).data, status=status.HTTP_201_CREATED)
 
@@ -165,6 +170,7 @@ class GoodsReceiptViewSet(viewsets.ModelViewSet):
             notes=request.data.get('notes', ''),
             items_data=items_data,
             user=request.user,
+            warehouse_id=request.data.get('warehouse'),
         )
         return Response(GoodsReceiptSerializer(receipt).data, status=status.HTTP_201_CREATED)
 

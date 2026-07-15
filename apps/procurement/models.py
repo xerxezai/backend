@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.db import models
 
-from apps.inventory.models import Product
+from apps.inventory.models import Product, Warehouse
 
 
 def next_number(model, field, prefix):
@@ -79,6 +79,10 @@ class PurchaseOrderItem(models.Model):
 class GoodsReceipt(models.Model):
     receipt_number = models.CharField(max_length=20, unique=True, help_text='e.g. GR-001')
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.PROTECT, related_name='goods_receipts')
+    warehouse = models.ForeignKey(
+        Warehouse, null=True, blank=True, on_delete=models.SET_NULL, related_name='goods_receipts',
+        help_text='Inventory warehouse the stock was received into — defaults to the first active warehouse if left blank',
+    )
     received_date = models.DateField()
     received_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='goods_receipts_received')
     notes = models.TextField(blank=True)

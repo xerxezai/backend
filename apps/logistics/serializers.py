@@ -12,6 +12,7 @@ class ShipmentSerializer(serializers.ModelSerializer):
     tracking_updates = TrackingUpdateSerializer(many=True, read_only=True)
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     sales_order_number = serializers.CharField(source='sales_order.number', read_only=True, default=None)
+    origin_warehouse_name = serializers.CharField(source='origin_warehouse.name', read_only=True, default=None)
 
     class Meta:
         model = Shipment
