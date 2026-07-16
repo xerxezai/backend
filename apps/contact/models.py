@@ -26,6 +26,8 @@ class ContactMessage(models.Model):
     # AI-Powered ERP
     plan_interest   = models.CharField(max_length=50, blank=True)
     team_size       = models.CharField(max_length=20, blank=True)
+    timeline        = models.CharField(max_length=50, blank=True)
+    # Deprecated — kept for historical submissions; the contact form no longer sends these.
     budget_currency = models.CharField(max_length=10, blank=True)
     budget_range    = models.CharField(max_length=50, blank=True)
 
