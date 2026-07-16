@@ -104,6 +104,7 @@ class Activity(models.Model):
         ('meeting', 'Meeting'),
         ('demo', 'Demo'),
         ('task', 'Task'),
+        ('follow_up', 'Follow Up'),
         ('note', 'Note'),
     ]
     type = models.CharField(max_length=20, choices=TYPE, default='note')
