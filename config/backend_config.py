@@ -137,6 +137,10 @@ class BackendConfig:
                     'enabled': True,
                     'path': 'apps.careers'
                 },
+                'documents': {
+                    'enabled': True,
+                    'path': 'apps.documents'
+                },
                 'chatbot': {
                     'enabled': True,
                     'path': 'apps.chatbot'
