@@ -1,6 +1,8 @@
 from django.core.validators import FileExtensionValidator
 from django.db import models
 
+from apps.core.validators import validate_phone_with_country_code
+
 
 class CareerApplication(models.Model):
     STATUS_CHOICES = [
@@ -12,7 +14,7 @@ class CareerApplication(models.Model):
 
     name          = models.CharField(max_length=200)
     email         = models.EmailField()
-    phone         = models.CharField(max_length=50, blank=True)
+    phone         = models.CharField(max_length=50, blank=True, validators=[validate_phone_with_country_code])
     position      = models.CharField(max_length=200)
     experience    = models.CharField(max_length=50, blank=True)
     linkedin      = models.URLField(blank=True)

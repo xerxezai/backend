@@ -2,6 +2,8 @@
 from django.conf import settings
 from django.db import models
 
+from apps.core.validators import validate_phone_with_country_code
+
 
 class Customer(models.Model):
     SOURCE = [
@@ -17,7 +19,7 @@ class Customer(models.Model):
     name = models.CharField(max_length=200)
     company = models.CharField(max_length=200, blank=True)
     email = models.EmailField(blank=True)
-    phone = models.CharField(max_length=40, blank=True)
+    phone = models.CharField(max_length=40, blank=True, validators=[validate_phone_with_country_code])
     address = models.TextField(blank=True)
     city = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100, blank=True)
@@ -40,7 +42,7 @@ class Contact(models.Model):
     name = models.CharField(max_length=200)
     role = models.CharField(max_length=120, blank=True)
     email = models.EmailField(blank=True)
-    phone = models.CharField(max_length=40, blank=True)
+    phone = models.CharField(max_length=40, blank=True, validators=[validate_phone_with_country_code])
     is_primary = models.BooleanField(default=False)
 
     class Meta:
@@ -76,7 +78,7 @@ class Lead(models.Model):
     name = models.CharField(max_length=200)
     company = models.CharField(max_length=200, blank=True)
     email = models.EmailField(blank=True)
-    phone = models.CharField(max_length=40, blank=True)
+    phone = models.CharField(max_length=40, blank=True, validators=[validate_phone_with_country_code])
     source = models.CharField(max_length=20, choices=SOURCE, default='website')
     score = models.CharField(max_length=10, choices=SCORE, default='warm')
     status = models.CharField(max_length=20, choices=STATUS, default='new')

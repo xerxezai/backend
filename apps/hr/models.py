@@ -2,6 +2,8 @@
 from django.conf import settings
 from django.db import models
 
+from apps.core.validators import validate_phone_with_country_code
+
 
 class Department(models.Model):
     code = models.CharField(max_length=20, unique=True)
@@ -27,7 +29,7 @@ class Employee(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='employee_profile')
     full_name = models.CharField(max_length=200)
     email = models.EmailField(blank=True)
-    phone = models.CharField(max_length=40, blank=True)
+    phone = models.CharField(max_length=40, blank=True, validators=[validate_phone_with_country_code])
     department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.SET_NULL, related_name='employees')
     designation = models.CharField(max_length=120, blank=True)
     joined_on = models.DateField(null=True, blank=True)
