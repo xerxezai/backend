@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Document, DocumentVersion
+from .models import Document, DocumentVersion, DocumentComment, DocumentAuditTrail
 
 
 class DocumentVersionSerializer(serializers.ModelSerializer):
@@ -19,6 +19,25 @@ class DocumentVersionSerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(obj.file.url) if request else obj.file.url
 
 
+class DocumentCommentSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source='user.username', read_only=True, default='')
+
+    class Meta:
+        model = DocumentComment
+        fields = ['id', 'document', 'user', 'user_name', 'comment', 'created_at']
+        read_only_fields = ['id', 'document', 'user', 'created_at']
+
+
+class DocumentAuditTrailSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source='user.username', read_only=True, default='')
+    action_display = serializers.CharField(source='get_action_display', read_only=True)
+
+    class Meta:
+        model = DocumentAuditTrail
+        fields = ['id', 'document', 'user', 'user_name', 'action', 'action_display', 'notes', 'created_at']
+        read_only_fields = fields
+
+
 class DocumentSerializer(serializers.ModelSerializer):
     """Full serializer — detail view, create, update."""
     uploaded_by_name = serializers.CharField(source='uploaded_by.username', read_only=True, default='')
@@ -27,17 +46,20 @@ class DocumentSerializer(serializers.ModelSerializer):
     status_display   = serializers.CharField(source='get_status_display', read_only=True)
     file_url         = serializers.SerializerMethodField()
     versions         = DocumentVersionSerializer(many=True, read_only=True)
+    comments_count   = serializers.IntegerField(source='comments.count', read_only=True)
 
     class Meta:
         model = Document
         fields = [
             'id', 'title', 'description', 'category', 'category_display', 'file', 'file_url',
-            'version', 'status', 'status_display', 'uploaded_by', 'uploaded_by_name',
-            'approved_by', 'approved_by_name', 'created_at', 'updated_at', 'versions',
+            'version', 'status', 'status_display', 'expiry_date', 'views_count', 'comments_count',
+            'uploaded_by', 'uploaded_by_name', 'approved_by', 'approved_by_name',
+            'created_at', 'updated_at', 'versions',
         ]
-        # status only changes via the approve/reject actions, never a direct PUT/PATCH —
-        # keeps "who approved it" (approved_by) trustworthy.
-        read_only_fields = ['id', 'status', 'uploaded_by', 'approved_by', 'created_at', 'updated_at']
+        # status only changes via the approve/reject/submit-for-review actions, never a direct
+        # PUT/PATCH — keeps "who approved it" (approved_by) trustworthy. share_token is
+        # deliberately not exposed here — it's only ever returned by generate-share-link.
+        read_only_fields = ['id', 'status', 'views_count', 'uploaded_by', 'approved_by', 'created_at', 'updated_at']
 
     def get_file_url(self, obj):
         request = self.context.get('request')
@@ -52,12 +74,14 @@ class DocumentListSerializer(serializers.ModelSerializer):
     category_display  = serializers.CharField(source='get_category_display', read_only=True)
     status_display    = serializers.CharField(source='get_status_display', read_only=True)
     file_url          = serializers.SerializerMethodField()
+    comments_count    = serializers.IntegerField(source='comments.count', read_only=True)
 
     class Meta:
         model = Document
         fields = [
             'id', 'title', 'category', 'category_display', 'file_url', 'version', 'status',
-            'status_display', 'uploaded_by', 'uploaded_by_name', 'created_at', 'updated_at',
+            'status_display', 'expiry_date', 'views_count', 'comments_count',
+            'uploaded_by', 'uploaded_by_name', 'created_at', 'updated_at',
         ]
 
     def get_file_url(self, obj):

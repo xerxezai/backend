@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.utils.html import format_html
 
-from .models import Document, DocumentVersion
+from .models import Document, DocumentVersion, DocumentComment, DocumentAuditTrail
 
 
 class DocumentVersionInline(admin.TabularInline):
@@ -24,16 +24,19 @@ class DocumentAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ('Document', {
-            'fields': ('title', 'description', 'category', 'file', 'version'),
+            'fields': ('title', 'description', 'category', 'file', 'version', 'expiry_date'),
         }),
         ('Workflow', {
             'fields': ('status', 'uploaded_by', 'approved_by'),
+        }),
+        ('Sharing & Stats', {
+            'fields': ('share_token', 'views_count', 'is_deleted'),
         }),
         ('Meta', {
             'fields': ('created_at', 'updated_at'),
         }),
     )
-    readonly_fields = ('uploaded_by', 'approved_by', 'created_at', 'updated_at')
+    readonly_fields = ('uploaded_by', 'approved_by', 'share_token', 'views_count', 'created_at', 'updated_at')
 
     CATEGORY_COLORS = {
         'engineering_drawing': ('#e3f2fd', '#1565c0'),
@@ -89,3 +92,21 @@ class DocumentVersionAdmin(admin.ModelAdmin):
     search_fields = ('document__title', 'version_number', 'notes')
     ordering = ('-created_at',)
     readonly_fields = ('document', 'version_number', 'file', 'uploaded_by', 'notes', 'created_at')
+
+
+@admin.register(DocumentComment)
+class DocumentCommentAdmin(admin.ModelAdmin):
+    list_display = ('document', 'user', 'comment', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('document__title', 'user__username', 'comment')
+    ordering = ('-created_at',)
+    readonly_fields = ('document', 'user', 'comment', 'created_at')
+
+
+@admin.register(DocumentAuditTrail)
+class DocumentAuditTrailAdmin(admin.ModelAdmin):
+    list_display = ('document', 'action', 'user', 'created_at')
+    list_filter = ('action', 'created_at')
+    search_fields = ('document__title', 'user__username', 'notes')
+    ordering = ('-created_at',)
+    readonly_fields = ('document', 'user', 'action', 'notes', 'created_at')

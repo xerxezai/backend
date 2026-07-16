@@ -27,6 +27,11 @@ class Document(models.Model):
     version     = models.CharField(max_length=20, default='v1')
     status      = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
 
+    expiry_date  = models.DateField(null=True, blank=True)
+    share_token  = models.CharField(max_length=64, unique=True, null=True, blank=True)
+    views_count  = models.IntegerField(default=0)
+    is_deleted   = models.BooleanField(default=False)
+
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='uploaded_documents')
     approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_documents')
 
@@ -53,3 +58,43 @@ class DocumentVersion(models.Model):
 
     def __str__(self):
         return f'{self.document.title} — {self.version_number}'
+
+
+class DocumentComment(models.Model):
+    document   = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='comments')
+    user       = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='document_comments')
+    comment    = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f'Comment on {self.document.title} by {self.user}'
+
+
+class DocumentAuditTrail(models.Model):
+    ACTION_CHOICES = [
+        ('uploaded',    'Uploaded'),
+        ('viewed',      'Viewed'),
+        ('downloaded',  'Downloaded'),
+        ('approved',    'Approved'),
+        ('rejected',    'Rejected'),
+        ('deleted',     'Deleted'),
+        ('commented',   'Commented'),
+        ('new_version', 'New Version'),
+        ('shared',      'Shared'),
+        ('edited',      'Edited'),
+    ]
+    document   = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='audit_trail')
+    user       = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='document_audit_entries')
+    action     = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    notes      = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name_plural = 'Document audit trail entries'
+
+    def __str__(self):
+        return f'[{self.action}] {self.document.title} by {self.user}'
