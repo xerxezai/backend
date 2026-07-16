@@ -11,7 +11,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Quotation, QuotationItem, SalesOrder
+from .models import Quotation, QuotationItem, SalesOrder, SalesOrderItem
 from .serializers import QuotationSerializer, QuotationItemSerializer, SalesOrderSerializer
 from apps.mlm.models import Distributor, generate_commission_for_order
 
@@ -48,11 +48,24 @@ class QuotationViewSet(viewsets.ModelViewSet):
             number=f'SO-{next_n:03d}',
             customer=quotation.customer,
             quotation=quotation,
+            salesperson=request.user,
             order_date=timezone.now().date(),
             status='open',
+            subtotal=quotation.subtotal,
+            tax=quotation.tax,
             total=quotation.total,
             notes=quotation.notes,
         )
+        # Carry the quotation's line items over so the order (and any invoice later
+        # generated from it) has real items to total from, instead of falling back to
+        # a single synthetic line that re-applies GST on top of an already-taxed amount.
+        SalesOrderItem.objects.bulk_create([
+            SalesOrderItem(
+                order=order, product_id=item.product_id, description=item.description,
+                quantity=item.quantity, unit_price=item.unit_price, line_total=item.line_total,
+            )
+            for item in quotation.items.all()
+        ])
         quotation.status = 'accepted'
         quotation.save(update_fields=['status'])
         return Response(SalesOrderSerializer(order).data, status=status.HTTP_201_CREATED)
@@ -122,7 +135,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         Distributors, tagged by `type` so the frontend can set the right FK (salesperson vs
         distributor) on the order. Any authenticated user may read it."""
         User = get_user_model()
-        users = User.objects.order_by('username').values('id', 'username', 'first_name', 'last_name')
+        users = User.objects.filter(is_active=True).order_by('username').values('id', 'username', 'first_name', 'last_name')
         people = [
             {'type': 'user', 'id': u['id'], 'name': (f"{u['first_name']} {u['last_name']}".strip() or u['username'])}
             for u in users

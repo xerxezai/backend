@@ -83,6 +83,7 @@ class SalesOrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = SalesOrder
         fields = '__all__'
+        read_only_fields = ['subtotal', 'tax', 'total']
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', None)

@@ -77,6 +77,8 @@ class SalesOrder(models.Model):
     )
     order_date = models.DateField()
     status = models.CharField(max_length=20, choices=STATUS, default='open')
+    subtotal = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    tax = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -88,10 +90,17 @@ class SalesOrder(models.Model):
         return self.number
 
     def recalc(self):
-        """Recompute total from line items. Only called when items are explicitly
-        managed via the serializer — orders without items keep whatever total was
-        set directly (e.g. quotation conversion), so this never zeroes out legacy data."""
-        self.total = sum((i.line_total for i in self.items.all()), Decimal('0'))
+        """Recompute subtotal/tax/total from line items. Tax is 18% GST on the subtotal —
+        matches Quotation.recalc() so an order's total always equals what an auto-generated
+        invoice for it will show (previously this omitted GST entirely, so an invoice
+        generated from an order came out ~18% higher than the order's own total).
+        Only called when items are explicitly managed via the serializer — orders without
+        items keep whatever total was set directly (e.g. quotation conversion), so this
+        never zeroes out legacy data."""
+        sub = sum((i.line_total for i in self.items.all()), Decimal('0'))
+        self.subtotal = sub
+        self.tax = (sub * GST_RATE).quantize(Decimal('0.01'))
+        self.total = self.subtotal + self.tax
 
 
 class SalesOrderItem(models.Model):
