@@ -65,6 +65,13 @@ LOCAL_APPS = backend_config.get_enabled_apps() + ['apps.accounts']
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
+    # First in the list so it wraps every other middleware's response
+    # processing and compresses the fully-built body last. Skips anything
+    # that already carries a Content-Encoding header (e.g. WhiteNoise's
+    # precompressed static files) and anything under Django's 200-byte
+    # minimum, so small/binary/already-compressed responses pass through
+    # untouched.
+    'django.middleware.gzip.GZipMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
