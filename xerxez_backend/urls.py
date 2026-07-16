@@ -46,7 +46,7 @@ api_patterns = [
     path('documents/', include('apps.documents.urls')),
     path('analytics/', include('apps.analytics.urls')),
     path('chat/', include('apps.chatbot.urls')),
-    path('core/', include('apps.core.urls')),
+    path('core/', include('apps.core.urls', namespace='core-api')),
 
     # ERP modules
     path('crm/', include('apps.crm.urls')),
@@ -111,7 +111,7 @@ urlpatterns = [
     ),
 
     # Health check
-    path('health/', include('apps.core.urls')),
+    path('health/', include('apps.core.urls', namespace='core-health')),
 
     # Root endpoint
     path('', api_root),
