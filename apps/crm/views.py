@@ -15,6 +15,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
+from apps.core.mixins import ProtectedDestroyMixin
 from .models import Customer, Contact, Lead, Activity, Deal, CustomerNote
 from .serializers import (
     CustomerSerializer, ContactSerializer, LeadSerializer, ActivitySerializer,
@@ -22,7 +23,7 @@ from .serializers import (
 )
 
 
-class CustomerViewSet(viewsets.ModelViewSet):
+class CustomerViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
     authentication_classes = [JWTAuthentication]

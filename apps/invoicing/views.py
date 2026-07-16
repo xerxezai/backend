@@ -12,6 +12,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
+from apps.core.mixins import ProtectedDestroyMixin
 from .models import Invoice, InvoiceItem, Payment, RecurringInvoice, CreditNote
 from .serializers import (
     InvoiceSerializer, InvoiceItemSerializer, PaymentSerializer,
@@ -33,7 +34,7 @@ def sync_invoice_payment_status(invoice: Invoice):
     invoice.save(update_fields=['amount_paid', 'status'])
 
 
-class InvoiceViewSet(viewsets.ModelViewSet):
+class InvoiceViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
     queryset = Invoice.objects.select_related('customer', 'sales_order').prefetch_related('items').all()
     serializer_class = InvoiceSerializer
     authentication_classes = [JWTAuthentication]

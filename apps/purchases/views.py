@@ -3,11 +3,12 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
+from apps.core.mixins import ProtectedDestroyMixin
 from .models import Vendor, PurchaseOrder, PurchaseOrderItem
 from .serializers import VendorSerializer, PurchaseOrderSerializer, PurchaseOrderItemSerializer
 
 
-class VendorViewSet(viewsets.ModelViewSet):
+class VendorViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
     queryset = Vendor.objects.all()
     serializer_class = VendorSerializer
     authentication_classes = [JWTAuthentication]

@@ -13,6 +13,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
+from apps.core.mixins import ProtectedDestroyMixin
 from apps.inventory.models import Product, Warehouse, StockMovement
 from .models import Supplier, PurchaseOrder, PurchaseOrderItem, GoodsReceipt, GoodsReceiptItem, Bill, next_number
 from .serializers import (
@@ -61,7 +62,7 @@ def _create_goods_receipt(*, purchase_order, received_date, notes, items_data, u
     return receipt
 
 
-class SupplierViewSet(viewsets.ModelViewSet):
+class SupplierViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
     queryset = Supplier.objects.all()
     serializer_class = SupplierSerializer
     authentication_classes = [JWTAuthentication]
@@ -82,7 +83,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
         return response
 
 
-class PurchaseOrderViewSet(viewsets.ModelViewSet):
+class PurchaseOrderViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
     queryset = PurchaseOrder.objects.select_related('supplier').prefetch_related('items__product').all()
     serializer_class = PurchaseOrderSerializer
     authentication_classes = [JWTAuthentication]

@@ -14,6 +14,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
+from apps.core.mixins import ProtectedDestroyMixin
 from apps.invoicing.models import Invoice
 from apps.procurement.models import PurchaseOrder, Bill
 
@@ -21,7 +22,7 @@ from .models import Account, JournalEntry, JournalLine, Expense, next_number
 from .serializers import AccountSerializer, JournalEntrySerializer, JournalLineSerializer, ExpenseSerializer
 
 
-class AccountViewSet(viewsets.ModelViewSet):
+class AccountViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
     queryset = Account.objects.all()
     serializer_class = AccountSerializer
     authentication_classes = [JWTAuthentication]

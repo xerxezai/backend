@@ -17,6 +17,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from django_filters.rest_framework import DjangoFilterBackend
 
+from apps.core.mixins import ProtectedDestroyMixin
 from .models import ProductCategory, Product, Warehouse, StockMovement
 from .serializers import ProductCategorySerializer, ProductSerializer, WarehouseSerializer, StockMovementSerializer, _gen_code
 
@@ -47,7 +48,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
     search_fields = ['name', 'code']
 
 
-class ProductViewSet(viewsets.ModelViewSet):
+class ProductViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
     serializer_class = ProductSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -163,7 +164,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         return Response({'created_count': len(created), 'created': created, 'errors': errors}, status=status.HTTP_201_CREATED if created else status.HTTP_400_BAD_REQUEST)
 
 
-class WarehouseViewSet(viewsets.ModelViewSet):
+class WarehouseViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
     queryset = Warehouse.objects.prefetch_related('stock_movements__product').all()
     serializer_class = WarehouseSerializer
     authentication_classes = [JWTAuthentication]
