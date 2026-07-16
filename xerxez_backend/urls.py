@@ -42,6 +42,7 @@ api_patterns = [
     path('services/', include('apps.services.urls')),
     path('projects/', include('apps.projects.urls')),
     path('contact/', include('apps.contact.urls')),
+    path('careers/', include('apps.careers.urls')),
     path('analytics/', include('apps.analytics.urls')),
     path('chat/', include('apps.chatbot.urls')),
     path('core/', include('apps.core.urls')),
