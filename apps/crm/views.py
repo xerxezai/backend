@@ -175,6 +175,19 @@ class LeadViewSet(viewsets.ModelViewSet):
         qs = lead.note_entries.select_related('created_by').all()
         return Response(CustomerNoteSerializer(qs, many=True).data)
 
+    @action(detail=True, methods=['get'], url_path='history')
+    def history(self, request, pk=None):
+        lead = self.get_object()
+        deals = Deal.objects.filter(lead=lead).select_related('assigned_to')
+        activities = Activity.objects.filter(lead=lead).select_related('user')
+        notes = lead.note_entries.select_related('created_by').all()
+        return Response({
+            'lead': LeadSerializer(lead).data,
+            'deals': DealSerializer(deals, many=True).data,
+            'activities': ActivitySerializer(activities, many=True).data,
+            'notes': CustomerNoteSerializer(notes, many=True).data,
+        })
+
     @action(detail=True, methods=['post'], url_path='convert')
     def convert(self, request, pk=None):
         """Converts a lead into a Customer, linking the lead to the new/existing customer."""
