@@ -1,6 +1,21 @@
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 from .models import Invoice, InvoiceItem, Payment, RecurringInvoice, CreditNote
+
+
+def _build_invoice_items(invoice, items_data):
+    """Builds unsaved InvoiceItem instances for bulk_create. bulk_create skips
+    each instance's save(), so line_total/description are computed here to
+    mirror InvoiceItem.save() exactly."""
+    items = []
+    for item in items_data:
+        obj = InvoiceItem(invoice=invoice, **item)
+        if not obj.description and obj.product_id:
+            obj.description = obj.product.name
+        obj.line_total = (obj.quantity or 0) * (obj.unit_price or 0)
+        items.append(obj)
+    return items
 
 
 class InvoiceItemSerializer(serializers.ModelSerializer):
@@ -30,24 +45,24 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
-        invoice = Invoice.objects.create(**validated_data)
-        for item in items_data:
-            InvoiceItem.objects.create(invoice=invoice, **item)
-        invoice.recalc()
-        invoice.save()
+        with transaction.atomic():
+            invoice = Invoice.objects.create(**validated_data)
+            InvoiceItem.objects.bulk_create(_build_invoice_items(invoice, items_data))
+            invoice.recalc()
+            invoice.save()
         return invoice
 
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        if items_data is not None:
-            instance.items.all().delete()
-            for item in items_data:
-                InvoiceItem.objects.create(invoice=instance, **item)
-        instance.recalc()
-        instance.save()
+        with transaction.atomic():
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+            if items_data is not None:
+                instance.items.all().delete()
+                InvoiceItem.objects.bulk_create(_build_invoice_items(instance, items_data))
+            instance.recalc()
+            instance.save()
         return instance
 
 

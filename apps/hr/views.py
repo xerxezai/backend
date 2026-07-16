@@ -2,6 +2,7 @@ import calendar
 from datetime import date
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
@@ -290,8 +291,16 @@ class PayrollViewSet(viewsets.ModelViewSet):
         month, year = int(month), int(year)
         _, working_days = calendar.monthrange(year, month)
 
-        created_payrolls = []
-        for emp in Employee.objects.filter(status='active'):
+        PAYROLL_FIELDS = ['working_days', 'present_days', 'basic', 'allowances', 'deductions', 'gross', 'net_salary', 'status', 'generated_by']
+
+        employees = list(Employee.objects.filter(status='active').select_related('salary_structure'))
+        existing_by_employee = {
+            p.employee_id: p
+            for p in Payroll.objects.filter(month=month, year=year, employee__in=employees)
+        }
+
+        to_create, to_update = [], []
+        for emp in employees:
             try:
                 ss = emp.salary_structure
             except SalaryStructure.DoesNotExist:
@@ -315,23 +324,42 @@ class PayrollViewSet(viewsets.ModelViewSet):
             gross = basic_earned + total_allowances
             net = gross - total_deductions
 
-            payroll, _ = Payroll.objects.update_or_create(
-                employee=emp, month=month, year=year,
-                defaults={
-                    'working_days': working_days,
-                    'present_days': int(effective_days),
-                    'basic': basic_earned,
-                    'allowances': total_allowances,
-                    'deductions': total_deductions,
-                    'gross': gross,
-                    'net_salary': net,
-                    'status': 'draft',
-                    'generated_by': request.user,
-                },
-            )
-            PaySlip.objects.get_or_create(payroll=payroll)
-            created_payrolls.append(PayrollSerializer(payroll).data)
+            fields = {
+                'working_days': working_days,
+                'present_days': int(effective_days),
+                'basic': basic_earned,
+                'allowances': total_allowances,
+                'deductions': total_deductions,
+                'gross': gross,
+                'net_salary': net,
+                'status': 'draft',
+                'generated_by': request.user,
+            }
 
+            payroll = existing_by_employee.get(emp.id)
+            if payroll is not None:
+                for field, value in fields.items():
+                    setattr(payroll, field, value)
+                to_update.append(payroll)
+            else:
+                to_create.append(Payroll(employee=emp, month=month, year=year, **fields))
+
+        with transaction.atomic():
+            if to_create:
+                Payroll.objects.bulk_create(to_create, batch_size=500)
+            if to_update:
+                Payroll.objects.bulk_update(to_update, PAYROLL_FIELDS, batch_size=500)
+
+            all_payrolls = to_create + to_update
+            payrolls_without_payslip = set(
+                Payroll.objects.filter(pk__in=[p.pk for p in all_payrolls], payslip__isnull=True)
+                .values_list('pk', flat=True)
+            )
+            PaySlip.objects.bulk_create([
+                PaySlip(payroll=p) for p in all_payrolls if p.pk in payrolls_without_payslip
+            ], batch_size=500)
+
+        created_payrolls = [PayrollSerializer(p).data for p in all_payrolls]
         return Response({'generated': len(created_payrolls), 'payrolls': created_payrolls})
 
     @action(detail=True, methods=['patch'], url_path='approve')

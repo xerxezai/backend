@@ -3,6 +3,7 @@ import io
 from datetime import timedelta
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import Sum, Count
 from django.http import HttpResponse
 from django.utils import timezone
@@ -78,8 +79,24 @@ class CustomerViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'File must be UTF-8 encoded CSV.'}, status=status.HTTP_400_BAD_REQUEST)
 
         reader = csv.DictReader(io.StringIO(text))
-        created, errors = [], []
+        to_create, row_numbers, errors = [], [], []
         valid_sources = {s for s, _ in Customer.SOURCE}
+
+        # _gen_code() re-queries count()+exists() per call, which is both a per-row
+        # DB round trip and, if called repeatedly before any row is actually saved
+        # (as a single bulk_create requires), would hand out the same duplicate code
+        # to every row. Generate all codes for this import up front, tracked in memory.
+        next_n = Customer.objects.count()
+        existing_codes = set(Customer.objects.values_list('code', flat=True))
+
+        def next_code():
+            nonlocal next_n
+            while True:
+                next_n += 1
+                code = f"CUST{str(next_n).zfill(4)}"
+                if code not in existing_codes:
+                    existing_codes.add(code)
+                    return code
 
         for i, row in enumerate(reader, start=2):
             row = {(k or '').strip(): (v or '').strip() for k, v in row.items()}
@@ -97,14 +114,21 @@ class CustomerViewSet(viewsets.ModelViewSet):
                     name=name, company=row.get('company', ''), email=row.get('email', ''),
                     phone=row.get('phone', ''), industry=row.get('industry', ''),
                     source=source, city=row.get('city', ''), country=row.get('country', ''),
-                    tags=tags, code=_gen_code(Customer, 'CUST'),
+                    tags=tags, code=next_code(),
                 )
                 customer.full_clean()
-                customer.save()
-                created.append({'row': i, 'id': customer.id, 'name': customer.name, 'code': customer.code})
+                to_create.append(customer)
+                row_numbers.append(i)
             except Exception as exc:
                 errors.append({'row': i, 'error': str(exc)})
 
+        with transaction.atomic():
+            Customer.objects.bulk_create(to_create, batch_size=500)
+
+        created = [
+            {'row': row_i, 'id': c.id, 'name': c.name, 'code': c.code}
+            for row_i, c in zip(row_numbers, to_create)
+        ]
         return Response({'created_count': len(created), 'created': created, 'errors': errors}, status=status.HTTP_201_CREATED if created else status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['get'], url_path='export-csv')

@@ -1,7 +1,19 @@
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
 from .models import Supplier, PurchaseOrder, PurchaseOrderItem, GoodsReceipt, GoodsReceiptItem, Bill, next_number
+
+
+def _build_po_items(po, items_data):
+    """Builds unsaved PurchaseOrderItem instances for bulk_create. bulk_create skips
+    each instance's save(), so total is computed here to mirror PurchaseOrderItem.save()."""
+    items = []
+    for item in items_data:
+        obj = PurchaseOrderItem(purchase_order=po, **item)
+        obj.total = (obj.quantity or 0) * (obj.unit_price or 0)
+        items.append(obj)
+    return items
 
 
 class SupplierSerializer(serializers.ModelSerializer):
@@ -31,24 +43,24 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
-        po = PurchaseOrder.objects.create(po_number=next_number(PurchaseOrder, 'po_number', 'PO'), **validated_data)
-        for item in items_data:
-            PurchaseOrderItem.objects.create(purchase_order=po, **item)
-        po.recalc()
-        po.save()
+        with transaction.atomic():
+            po = PurchaseOrder.objects.create(po_number=next_number(PurchaseOrder, 'po_number', 'PO'), **validated_data)
+            PurchaseOrderItem.objects.bulk_create(_build_po_items(po, items_data))
+            po.recalc()
+            po.save()
         return po
 
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        if items_data is not None:
-            instance.items.all().delete()
-            for item in items_data:
-                PurchaseOrderItem.objects.create(purchase_order=instance, **item)
-        instance.recalc()
-        instance.save()
+        with transaction.atomic():
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+            if items_data is not None:
+                instance.items.all().delete()
+                PurchaseOrderItem.objects.bulk_create(_build_po_items(instance, items_data))
+            instance.recalc()
+            instance.save()
         return instance
 
 

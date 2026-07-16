@@ -1,6 +1,21 @@
 from decimal import Decimal
+from django.db import transaction
 from rest_framework import serializers
 from .models import Quotation, QuotationItem, SalesOrder, SalesOrderItem
+
+
+def _build_items(model, fk_field, parent, items_data):
+    """Builds unsaved line-item instances for bulk_create. bulk_create skips each
+    instance's save(), so line_total/description are computed here to mirror
+    QuotationItem.save()/SalesOrderItem.save() exactly."""
+    items = []
+    for item in items_data:
+        obj = model(**{fk_field: parent}, **item)
+        if not obj.description and obj.product_id:
+            obj.description = obj.product.name
+        obj.line_total = (obj.quantity or 0) * (obj.unit_price or 0)
+        items.append(obj)
+    return items
 
 
 class QuotationItemSerializer(serializers.ModelSerializer):
@@ -24,24 +39,24 @@ class QuotationSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
-        quotation = Quotation.objects.create(**validated_data)
-        for item in items_data:
-            QuotationItem.objects.create(quotation=quotation, **item)
-        quotation.recalc()
-        quotation.save()
+        with transaction.atomic():
+            quotation = Quotation.objects.create(**validated_data)
+            QuotationItem.objects.bulk_create(_build_items(QuotationItem, 'quotation', quotation, items_data))
+            quotation.recalc()
+            quotation.save()
         return quotation
 
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        if items_data is not None:
-            instance.items.all().delete()
-            for item in items_data:
-                QuotationItem.objects.create(quotation=instance, **item)
-        instance.recalc()
-        instance.save()
+        with transaction.atomic():
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+            if items_data is not None:
+                instance.items.all().delete()
+                QuotationItem.objects.bulk_create(_build_items(QuotationItem, 'quotation', instance, items_data))
+            instance.recalc()
+            instance.save()
         return instance
 
 
@@ -71,25 +86,25 @@ class SalesOrderSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', None)
-        order = SalesOrder.objects.create(**validated_data)
-        if items_data:
-            for item in items_data:
-                SalesOrderItem.objects.create(order=order, **item)
-            order.recalc()
-            order.save()
+        with transaction.atomic():
+            order = SalesOrder.objects.create(**validated_data)
+            if items_data:
+                SalesOrderItem.objects.bulk_create(_build_items(SalesOrderItem, 'order', order, items_data))
+                order.recalc()
+                order.save()
         return order
 
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        if items_data is not None:
-            instance.items.all().delete()
-            for item in items_data:
-                SalesOrderItem.objects.create(order=instance, **item)
-            instance.recalc()
+        with transaction.atomic():
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
             instance.save()
+            if items_data is not None:
+                instance.items.all().delete()
+                SalesOrderItem.objects.bulk_create(_build_items(SalesOrderItem, 'order', instance, items_data))
+                instance.recalc()
+                instance.save()
         return instance
 
     def get_salesperson_name(self, obj):

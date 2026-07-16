@@ -91,9 +91,26 @@ class ProductViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'File must be UTF-8 encoded CSV.'}, status=status.HTTP_400_BAD_REQUEST)
 
         reader = csv.DictReader(io.StringIO(text))
-        created, errors = [], []
+        to_create, row_numbers, errors = [], [], []
         categories_by_name = {c.name.lower(): c for c in ProductCategory.objects.all()}
         valid_units = {u for u, _ in Product.UNIT}
+
+        # _gen_code() re-queries count()+exists() per call, which is both a per-row
+        # DB round trip and, if called repeatedly before any row is actually saved
+        # (as a single bulk_create requires), would hand out the same duplicate code
+        # to every row. Generate auto-assigned codes for this import up front, tracked
+        # in memory alongside any explicit codes rows supply in the CSV.
+        next_n = Product.objects.count()
+        existing_codes = set(Product.objects.values_list('code', flat=True))
+
+        def next_code():
+            nonlocal next_n
+            while True:
+                next_n += 1
+                code = f"PROD{str(next_n).zfill(4)}"
+                if code not in existing_codes:
+                    existing_codes.add(code)
+                    return code
 
         for i, row in enumerate(reader, start=2):  # row 1 is the header
             row = {(k or '').strip(): (v or '').strip() for k, v in row.items()}
@@ -113,9 +130,14 @@ class ProductViewSet(viewsets.ModelViewSet):
                 if unit not in valid_units:
                     errors.append({'row': i, 'error': f'Invalid unit "{unit}".'})
                     continue
+                code = row.get('code') or ''
+                if code:
+                    existing_codes.add(code)
+                else:
+                    code = next_code()
                 product = Product(
                     name=name,
-                    code=row.get('code') or '',
+                    code=code,
                     category=category,
                     unit=unit,
                     cost_price=Decimal(row.get('cost_price') or '0'),
@@ -123,16 +145,21 @@ class ProductViewSet(viewsets.ModelViewSet):
                     min_stock_level=Decimal(row.get('min_stock_level') or '0'),
                     barcode=row.get('barcode') or '',
                 )
-                if not product.code:
-                    product.code = _gen_code(Product, 'PROD')
                 product.full_clean(exclude=['image'])
-                product.save()
-                created.append({'row': i, 'id': product.id, 'name': product.name, 'code': product.code})
+                to_create.append(product)
+                row_numbers.append(i)
             except (InvalidOperation, ValueError) as exc:
                 errors.append({'row': i, 'error': f'Invalid number: {exc}'})
             except Exception as exc:
                 errors.append({'row': i, 'error': str(exc)})
 
+        with transaction.atomic():
+            Product.objects.bulk_create(to_create, batch_size=500)
+
+        created = [
+            {'row': row_i, 'id': p.id, 'name': p.name, 'code': p.code}
+            for row_i, p in zip(row_numbers, to_create)
+        ]
         return Response({'created_count': len(created), 'created': created, 'errors': errors}, status=status.HTTP_201_CREATED if created else status.HTTP_400_BAD_REQUEST)
 
 
