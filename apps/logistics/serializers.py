@@ -25,7 +25,10 @@ class ShipmentSerializer(serializers.ModelSerializer):
 
 
 class DeliverySerializer(serializers.ModelSerializer):
-    shipment_tracking_number = serializers.CharField(source='shipment.shipment_number', read_only=True)
+    shipment_number = serializers.CharField(source='shipment.shipment_number', read_only=True)
+    tracking_number = serializers.CharField(source='shipment.tracking_number', read_only=True)
+    customer_name = serializers.CharField(source='shipment.customer.name', read_only=True)
+    carrier = serializers.CharField(source='shipment.carrier', read_only=True)
 
     class Meta:
         model = Delivery

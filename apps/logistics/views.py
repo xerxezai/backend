@@ -15,6 +15,24 @@ from .models import Shipment, TrackingUpdate, Delivery, Warehouse
 from .serializers import ShipmentSerializer, TrackingUpdateSerializer, DeliverySerializer, WarehouseSerializer
 
 
+def generate_delivery_for_shipment(shipment, user=None):
+    """Books one Delivery record the first time a Shipment reaches 'delivered', idempotent on
+    the shipment FK so re-marking an already-delivered shipment (or a retried request) never
+    creates a duplicate — mirrors apps.sales.views.generate_stock_out_for_order."""
+    if Delivery.objects.filter(shipment=shipment).exists():
+        return
+    delivered_by = ''
+    if user and getattr(user, 'is_authenticated', False):
+        delivered_by = user.get_full_name() or user.username
+    Delivery.objects.create(
+        shipment=shipment,
+        delivery_date=shipment.actual_delivery or timezone.now().date(),
+        delivered_by=delivered_by,
+        status='delivered',
+        notes='Auto-recorded when the shipment was marked delivered.',
+    )
+
+
 class ShipmentViewSet(viewsets.ModelViewSet):
     queryset = Shipment.objects.select_related('customer', 'sales_order').prefetch_related('tracking_updates').all()
     serializer_class = ShipmentSerializer
@@ -46,6 +64,10 @@ class ShipmentViewSet(viewsets.ModelViewSet):
             shipment=shipment, status=new_status, location='',
             description=f'Status changed to {new_status}', occurred_at=now,
         )
+
+        if new_status == 'delivered':
+            generate_delivery_for_shipment(shipment, user=request.user)
+
         return Response(ShipmentSerializer(shipment).data)
 
     @action(detail=False, methods=['get'], url_path='export-csv')
@@ -71,7 +93,7 @@ class TrackingUpdateViewSet(viewsets.ModelViewSet):
 
 
 class DeliveryViewSet(viewsets.ModelViewSet):
-    queryset = Delivery.objects.select_related('shipment').all()
+    queryset = Delivery.objects.select_related('shipment', 'shipment__customer').all()
     serializer_class = DeliverySerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
