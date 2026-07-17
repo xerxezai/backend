@@ -203,6 +203,19 @@ class BackendConfig:
                 'lma': {
                     'enabled': True,
                     'path': 'apps.lma'
+                },
+                # ---- EPC modules ----
+                'project_management': {
+                    'enabled': True,
+                    'path': 'apps.project_management'
+                },
+                'asset_management': {
+                    'enabled': True,
+                    'path': 'apps.asset_management'
+                },
+                'qhse': {
+                    'enabled': True,
+                    'path': 'apps.qhse'
                 }
             },
             

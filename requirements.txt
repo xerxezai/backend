@@ -16,6 +16,7 @@ psycopg2-binary==2.9.12
 python-dotenv==1.2.2
 pytz==2026.2
 PyYAML==6.0.3
+qrcode==8.2
 redis==8.0.0
 resend==2.32.2
 sqlparse==0.5.5

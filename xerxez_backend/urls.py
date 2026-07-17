@@ -67,6 +67,12 @@ api_patterns = [
 
     # LMA module
     path('lma/', include('apps.lma.urls')),
+
+    # EPC modules — note: 'project-management/' (not 'projects/', which apps.projects
+    # already owns for the marketing site's portfolio/case-studies pages).
+    path('project-management/', include('apps.project_management.urls')),
+    path('asset-management/', include('apps.asset_management.urls')),
+    path('qhse/', include('apps.qhse.urls')),
 ]
 
 
