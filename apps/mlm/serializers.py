@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from .models import Distributor, Commission, Payout, MLMSettings, next_number
@@ -29,6 +31,10 @@ class CommissionSerializer(serializers.ModelSerializer):
     # Not required from the client — manually-added commissions (via the Commissions page's
     # "Add Commission" form) don't collect a rate, it's derived from MLMSettings by level.
     rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
+    # Not required either when a sales order is linked — amount is then derived server-side
+    # from that order's total, so a client-supplied figure can never drift from it. Still
+    # required for a free-standing manual commission with no order to derive from.
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2, required=False)
 
     class Meta:
         model = Commission
@@ -39,6 +45,13 @@ class CommissionSerializer(serializers.ModelSerializer):
             settings_obj = MLMSettings.get_solo()
             rate_by_level = {1: settings_obj.level1_rate, 2: settings_obj.level2_rate, 3: settings_obj.level3_rate}
             validated_data['rate'] = rate_by_level.get(validated_data.get('level'), 0)
+        order = validated_data.get('order')
+        if order is not None:
+            # Server-computed, always — a client-sent amount for an order-linked commission
+            # is never trusted, so the two can't disagree with the order it's traceable to.
+            validated_data['amount'] = (order.total or Decimal('0')) * (validated_data['rate'] / Decimal('100'))
+        elif validated_data.get('amount') is None:
+            raise serializers.ValidationError({'amount': 'Amount is required when no sales order is linked.'})
         commission = super().create(validated_data)
         # Matches CommissionViewSet.calculate's behavior: a commission always adds to the
         # earning distributor's running total, regardless of pending/paid status.
