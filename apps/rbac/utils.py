@@ -1,6 +1,6 @@
 from .models import UserModuleAccess
 
-# Always visible to every logged-in user, no access control ever — see Module docstring.
+# EPC modules are restricted to Super Admins only.
 EPC_MODULES = ['document_management', 'project_management', 'asset_management', 'qhse']
 
 
@@ -34,14 +34,17 @@ def has_module_access(user, module_name):
     if user.is_superuser:
         return True
     if module_name in EPC_MODULES:
-        return True
+        return False  # EPC modules: super admin only (checked above)
     return UserModuleAccess.objects.filter(user=user, module__name=module_name, is_active=True).exists()
 
 
 def filter_queryset_by_role(queryset, user, module_name, user_field='created_by'):
     role = get_user_role(user, module_name)
-    if role in ('super_admin', 'module_admin'):
+    if role == 'super_admin':
+        # Sees everything
         return queryset
-    if role in ('regular_user', 'read_only'):
+    if role in ('module_admin', 'regular_user', 'read_only'):
+        # Module Admin, Regular User and Read Only all see only their own data
         return queryset.filter(**{user_field: user})
+    # No access
     return queryset.none()
