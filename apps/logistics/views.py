@@ -62,7 +62,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
 
         TrackingUpdate.objects.create(
             shipment=shipment, status=new_status, location='',
-            description=f'Status changed to {new_status}', occurred_at=now,
+            description=f'Status changed to {valid_statuses[new_status]}', occurred_at=now,
         )
 
         if new_status == 'delivered':
