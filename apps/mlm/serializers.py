@@ -28,6 +28,8 @@ class CommissionSerializer(serializers.ModelSerializer):
     distributor_name = serializers.CharField(source='distributor.name', read_only=True)
     distributor_id_display = serializers.CharField(source='distributor.distributor_id', read_only=True)
     order_number = serializers.CharField(source='order.number', read_only=True, default=None)
+    order_customer_name = serializers.CharField(source='order.customer.name', read_only=True, default=None)
+    order_amount = serializers.DecimalField(source='order.total', max_digits=14, decimal_places=2, read_only=True, default=None)
     # Not required from the client — manually-added commissions (via the Commissions page's
     # "Add Commission" form) don't collect a rate, it's derived from MLMSettings by level.
     rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)

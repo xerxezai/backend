@@ -62,7 +62,7 @@ class DistributorViewSet(viewsets.ModelViewSet):
 
 
 class CommissionViewSet(viewsets.ModelViewSet):
-    queryset = Commission.objects.select_related('distributor', 'order').all()
+    queryset = Commission.objects.select_related('distributor', 'order', 'order__customer').all()
     serializer_class = CommissionSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
