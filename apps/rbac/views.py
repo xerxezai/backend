@@ -109,6 +109,18 @@ class UserDetailView(APIView):
             return Response({'error': 'User not found'}, status=404)
         role = request.data.get('role')
         modules = request.data.get('modules', [])
+        if role:
+            # Keep the Django is_superuser/is_staff flags in sync with the RBAC role —
+            # UserManagementView.post() sets them on create, but nothing previously kept
+            # them in sync on edit. Since UserListSerializer's Role/Modules columns check
+            # is_superuser before module_access, a Super Admin demoted here would keep
+            # showing "Super Admin" / "All modules" forever even though their
+            # UserModuleAccess rows below were correctly rewritten.
+            is_super = role == 'super_admin'
+            if user.is_superuser != is_super or user.is_staff != is_super:
+                user.is_superuser = is_super
+                user.is_staff = is_super
+                user.save(update_fields=['is_superuser', 'is_staff'])
         if modules:
             UserModuleAccess.objects.filter(user=user).delete()
             for module_name in modules:
