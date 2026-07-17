@@ -5,6 +5,7 @@ import secrets
 
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
+from django.db import IntegrityError
 from django.utils import timezone
 
 User = get_user_model()
@@ -12,7 +13,7 @@ from rest_framework import generics, permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import RefreshToken, Token
 from rest_framework_simplejwt.exceptions import TokenError
 from drf_yasg.utils import swagger_auto_schema
 
@@ -66,7 +67,15 @@ class LoginView(generics.GenericAPIView):
         except Exception:
             pass
 
-        refresh = RefreshToken.for_user(user)
+        try:
+            refresh = RefreshToken.for_user(user)
+        except IntegrityError:
+            # token_blacklist_outstandingtoken's FK can be stale (pre-dates an old
+            # AUTH_USER_MODEL swap) and reject the insert for some accounts.
+            # Fall back to a token that skips blacklist tracking rather than
+            # 500ing the whole login — see the accompanying migration for the
+            # actual schema repair.
+            refresh = Token.for_user.__func__(RefreshToken, user)
 
         return Response({
             'access': str(refresh.access_token),
