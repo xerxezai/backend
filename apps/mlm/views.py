@@ -15,7 +15,7 @@ from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
 from apps.sales.models import SalesOrder
-from .models import Distributor, Commission, Payout, MLMSettings, next_number
+from .models import Distributor, Commission, Payout, MLMSettings, next_number, generate_payout_for_commission
 from .serializers import (
     DistributorSerializer, CommissionSerializer, PayoutSerializer, MLMSettingsSerializer,
 )
@@ -120,10 +120,17 @@ class CommissionViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='bulk-approve')
     def bulk_approve(self, request):
+        """Approves each pending commission and auto-books its payout. queryset.update() skips
+        save()/serializer hooks, so generate_payout_for_commission is called explicitly here —
+        same reason CommissionSerializer.update() calls it too, for the direct-PATCH path."""
         ids = request.data.get('ids') or []
-        qs = Commission.objects.filter(id__in=ids)
-        qs.update(status='paid')
-        updated = Commission.objects.filter(id__in=ids).select_related('distributor', 'order')
+        qs = Commission.objects.filter(id__in=ids, status='pending')
+        to_approve = list(qs)
+        qs.update(status='approved')
+        for commission in to_approve:
+            commission.status = 'approved'
+            generate_payout_for_commission(commission)
+        updated = Commission.objects.filter(id__in=ids).select_related('distributor', 'order', 'order__customer')
         return Response(CommissionSerializer(updated, many=True).data)
 
     @action(detail=False, methods=['get'], url_path='export-csv')
@@ -139,7 +146,7 @@ class CommissionViewSet(viewsets.ModelViewSet):
 
 
 class PayoutViewSet(viewsets.ModelViewSet):
-    queryset = Payout.objects.select_related('distributor').all()
+    queryset = Payout.objects.select_related('distributor', 'commission', 'commission__order').all()
     serializer_class = PayoutSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -156,6 +163,11 @@ class PayoutViewSet(viewsets.ModelViewSet):
         next_status = order_steps[order_steps.index(payout.status) + 1]
         payout.status = next_status
         payout.save(update_fields=['status'])
+        # Closes the loop back to the commission this payout was approved from — once the
+        # money has actually moved, the commission should read as settled too, not stuck
+        # showing "Approved" forever.
+        if next_status == 'completed' and payout.commission_id:
+            Commission.objects.filter(pk=payout.commission_id).exclude(status='paid').update(status='paid')
         return Response(PayoutSerializer(payout).data)
 
     @action(detail=False, methods=['get'], url_path='export-csv')

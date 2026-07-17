@@ -71,6 +71,7 @@ class Distributor(models.Model):
 class Commission(models.Model):
     STATUS = [
         ('pending', 'Pending'),
+        ('approved', 'Approved'),
         ('paid', 'Paid'),
     ]
     distributor = models.ForeignKey(Distributor, on_delete=models.CASCADE, related_name='commissions', help_text='The earner')
@@ -157,6 +158,11 @@ class Payout(models.Model):
         ('cash', 'Cash'),
     ]
     distributor = models.ForeignKey(Distributor, on_delete=models.CASCADE, related_name='payouts')
+    commission = models.OneToOneField(
+        Commission, null=True, blank=True, on_delete=models.SET_NULL, related_name='payout',
+        help_text='The commission this payout was auto-created from, on approval. Null for '
+                   'manually-created payouts (e.g. one payout bundling several commissions).',
+    )
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     payout_date = models.DateField()
     method = models.CharField(max_length=10, choices=METHOD, default='bank')
@@ -169,6 +175,22 @@ class Payout(models.Model):
 
     def __str__(self):
         return f'Payout {self.id} — {self.distributor} ({self.amount})'
+
+
+def generate_payout_for_commission(commission: 'Commission'):
+    """Books one pending Payout the first time a Commission is approved — idempotent via the
+    OneToOneField (a second call for an already-paid-out commission is a no-op), mirroring
+    generate_commission_for_order's create-or-return-existing shape. A zero/negative-amount
+    commission never gets a payout, same guard as the zero-total case in commission generation."""
+    if commission.status != 'approved' or commission.amount <= 0:
+        return None
+    existing = Payout.objects.filter(commission=commission).first()
+    if existing:
+        return existing
+    return Payout.objects.create(
+        distributor=commission.distributor, commission=commission, amount=commission.amount,
+        payout_date=timezone.now().date(), status='pending',
+    )
 
 
 class MLMSettings(models.Model):

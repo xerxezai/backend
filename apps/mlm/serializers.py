@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from .models import Distributor, Commission, Payout, MLMSettings, next_number
+from .models import Distributor, Commission, Payout, MLMSettings, next_number, generate_payout_for_commission
 
 
 class DistributorSerializer(serializers.ModelSerializer):
@@ -62,9 +62,18 @@ class CommissionSerializer(serializers.ModelSerializer):
         distributor.save(update_fields=['total_earnings'])
         return commission
 
+    def update(self, instance, validated_data):
+        commission = super().update(instance, validated_data)
+        # Covers a direct PATCH to this commission's status (bulk-approve, the other mutation
+        # path, calls generate_payout_for_commission itself since it uses queryset.update()).
+        if commission.status == 'approved':
+            generate_payout_for_commission(commission)
+        return commission
+
 
 class PayoutSerializer(serializers.ModelSerializer):
     distributor_name = serializers.CharField(source='distributor.name', read_only=True)
+    commission_order_number = serializers.CharField(source='commission.order.number', read_only=True, default=None)
 
     class Meta:
         model = Payout
