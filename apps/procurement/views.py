@@ -15,6 +15,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from apps.core.mixins import ProtectedDestroyMixin
 from apps.inventory.models import Product, Warehouse, StockMovement
+from apps.rbac.utils import filter_queryset_by_role
 from .models import Supplier, PurchaseOrder, PurchaseOrderItem, GoodsReceipt, GoodsReceiptItem, Bill, next_number
 from .serializers import (
     SupplierSerializer, PurchaseOrderSerializer, PurchaseOrderItemSerializer,
@@ -96,6 +97,13 @@ class PurchaseOrderViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
         'order_date': ['exact', 'gte', 'lte'],
     }
     ordering_fields = ['order_date', 'total']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return filter_queryset_by_role(qs, self.request.user, 'procurement')
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
 
     @action(detail=True, methods=['put', 'post'], url_path='send')
     def send(self, request, pk=None):

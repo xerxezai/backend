@@ -40,7 +40,7 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseOrder
         fields = '__all__'
-        read_only_fields = ['po_number', 'total']
+        read_only_fields = ['po_number', 'total', 'created_by']
 
     def get_has_bill(self, obj):
         return obj.bills.exists()

@@ -35,6 +35,10 @@ class Employee(models.Model):
     joined_on = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS, default='active')
     salary = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_employees',
+        help_text='Who created this record — drives RBAC data-level filtering for Regular User/Read Only roles.',
+    )
 
     class Meta:
         ordering = ['full_name']

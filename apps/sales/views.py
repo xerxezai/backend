@@ -15,6 +15,7 @@ from .models import Quotation, QuotationItem, SalesOrder, SalesOrderItem
 from .serializers import QuotationSerializer, QuotationItemSerializer, SalesOrderSerializer
 from apps.mlm.models import Distributor, generate_commission_for_order
 from apps.inventory.models import StockMovement, Warehouse
+from apps.rbac.utils import filter_queryset_by_role
 
 
 def generate_stock_out_for_order(order, user=None):
@@ -134,8 +135,12 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
     def _maybe_book_stock_out(self, order, user=None):
         generate_stock_out_for_order(order, user=user)
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return filter_queryset_by_role(qs, self.request.user, 'sales')
+
     def perform_create(self, serializer):
-        order = serializer.save()
+        order = serializer.save(created_by=self.request.user)
         self._maybe_generate_commission(order)
         self._maybe_book_stock_out(order, user=self.request.user)
 

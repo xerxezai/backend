@@ -13,6 +13,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from rest_framework.parsers import MultiPartParser, FormParser
 
+from apps.rbac.utils import filter_queryset_by_role
 from .models import (Attendance, Department, Employee, LeaveRequest, PaySlip,
                      Payroll, SalaryStructure, Shift,
                      PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement)
@@ -50,6 +51,13 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter, DjangoFilterBackend]
     search_fields = ['full_name', 'email', 'code']
     filterset_fields = ['department', 'status']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return filter_queryset_by_role(qs, self.request.user, 'hr')
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
 
     @action(detail=False, methods=['get'], url_path='linkable-users')
     def linkable_users(self, request):

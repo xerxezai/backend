@@ -216,6 +216,11 @@ class BackendConfig:
                 'qhse': {
                     'enabled': True,
                     'path': 'apps.qhse'
+                },
+                # ---- RBAC ----
+                'rbac': {
+                    'enabled': True,
+                    'path': 'apps.rbac'
                 }
             },
             

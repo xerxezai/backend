@@ -73,6 +73,11 @@ api_patterns = [
     path('project-management/', include('apps.project_management.urls')),
     path('asset-management/', include('apps.asset_management.urls')),
     path('qhse/', include('apps.qhse.urls')),
+
+    # RBAC — mounted at 'rbac/' (making the real path /api/v1/rbac/...) to match this
+    # codebase's single /api/v1/ prefix convention, not the standalone 'api/rbac/' path
+    # given in the original spec.
+    path('rbac/', include('apps.rbac.urls')),
 ]
 
 

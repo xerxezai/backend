@@ -32,7 +32,7 @@ class ExpenseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Expense
         fields = '__all__'
-        read_only_fields = ['expense_number']
+        read_only_fields = ['expense_number', 'created_by']
 
 
 class TaxReportSerializer(serializers.ModelSerializer):

@@ -16,6 +16,7 @@ from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
 from apps.core.mixins import ProtectedDestroyMixin
+from apps.rbac.utils import filter_queryset_by_role
 from .models import Customer, Contact, Lead, Activity, Deal, CustomerNote
 from .serializers import (
     CustomerSerializer, ContactSerializer, LeadSerializer, ActivitySerializer,
@@ -41,7 +42,10 @@ class CustomerViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
         tag = self.request.query_params.get('tag')
         if tag:
             qs = qs.filter(tags__contains=[tag])
-        return qs
+        return filter_queryset_by_role(qs, self.request.user, 'crm')
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
 
     @action(detail=True, methods=['get', 'post'], url_path='notes')
     def notes(self, request, pk=None):
@@ -163,6 +167,13 @@ class LeadViewSet(viewsets.ModelViewSet):
     search_fields = ['name', 'company', 'email']
     filterset_fields = ['status', 'source', 'score', 'assigned_to']
     ordering_fields = ['created_at', 'estimated_value', 'follow_up_date']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return filter_queryset_by_role(qs, self.request.user, 'crm')
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
 
     @action(detail=True, methods=['get', 'post'], url_path='notes')
     def notes(self, request, pk=None):

@@ -27,6 +27,10 @@ class Customer(models.Model):
     source = models.CharField(max_length=20, choices=SOURCE, blank=True, default='')
     tags = models.JSONField(default=list, blank=True, help_text='e.g. ["VIP","Prospect"]')
     is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_customers',
+        help_text='Who created this record — drives RBAC data-level filtering for Regular User/Read Only roles.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -87,6 +91,10 @@ class Lead(models.Model):
     assigned_to = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='crm_leads')
     customer = models.ForeignKey(Customer, null=True, blank=True, on_delete=models.SET_NULL, related_name='leads')
     notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_leads',
+        help_text='Who created this record — drives RBAC data-level filtering for Regular User/Read Only roles.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

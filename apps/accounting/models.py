@@ -1,4 +1,5 @@
 """Accounting models: Chart of Accounts, Journal Entries, Expenses, Tax Reports."""
+from django.conf import settings
 from django.db import models
 
 
@@ -81,6 +82,10 @@ class Expense(models.Model):
     paid_by = models.CharField(max_length=150, blank=True, help_text='Free-text name of who paid')
     receipt_image = models.ImageField(upload_to='receipts/', null=True, blank=True)
     status = models.CharField(max_length=10, choices=STATUS, default='pending')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_expenses',
+        help_text='Who created this record — drives RBAC data-level filtering for Regular User/Read Only roles.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -24,6 +24,7 @@ class CustomerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Customer
         fields = '__all__'
+        read_only_fields = ['created_by']
 
     def create(self, validated_data):
         if not validated_data.get('code'):
@@ -46,6 +47,7 @@ class LeadSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lead
         fields = '__all__'
+        read_only_fields = ['created_by']
 
 
 class ActivitySerializer(serializers.ModelSerializer):

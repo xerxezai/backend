@@ -17,6 +17,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from apps.core.mixins import ProtectedDestroyMixin
 from apps.invoicing.models import Invoice
 from apps.procurement.models import PurchaseOrder, Bill
+from apps.rbac.utils import filter_queryset_by_role
 
 from .models import Account, JournalEntry, JournalLine, Expense, next_number
 from .serializers import AccountSerializer, JournalEntrySerializer, JournalLineSerializer, ExpenseSerializer
@@ -66,8 +67,12 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         'date': ['exact', 'gte', 'lte'],
     }
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return filter_queryset_by_role(qs, self.request.user, 'accounting')
+
     def perform_create(self, serializer):
-        serializer.save(expense_number=next_number(Expense, 'expense_number', 'EXP'))
+        serializer.save(expense_number=next_number(Expense, 'expense_number', 'EXP'), created_by=self.request.user)
 
     @action(detail=True, methods=['put'], url_path='approve')
     def approve(self, request, pk=None):

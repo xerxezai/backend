@@ -59,6 +59,10 @@ class PurchaseOrder(models.Model):
     status = models.CharField(max_length=20, choices=STATUS, default='draft')
     notes = models.TextField(blank=True)
     total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_purchase_orders',
+        help_text='Who created this record — drives RBAC data-level filtering for Regular User/Read Only roles.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -81,6 +81,10 @@ class SalesOrder(models.Model):
     tax = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_sales_orders',
+        help_text='Who created this record — drives RBAC data-level filtering for Regular User/Read Only roles.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
