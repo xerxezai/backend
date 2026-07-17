@@ -35,11 +35,15 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
 class PurchaseOrderSerializer(serializers.ModelSerializer):
     items = PurchaseOrderItemSerializer(many=True, required=False)
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
+    has_bill = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseOrder
         fields = '__all__'
         read_only_fields = ['po_number', 'total']
+
+    def get_has_bill(self, obj):
+        return obj.bills.exists()
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
@@ -100,6 +104,15 @@ class BillSerializer(serializers.ModelSerializer):
 
     def get_is_overdue(self, obj):
         return bool(obj.status == 'unpaid' and obj.due_date and obj.due_date < timezone.now().date())
+
+    def validate_purchase_order(self, value):
+        if value is not None:
+            qs = Bill.objects.filter(purchase_order=value)
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError('A bill already exists for this purchase order.')
+        return value
 
     def create(self, validated_data):
         validated_data['bill_number'] = next_number(Bill, 'bill_number', 'BILL')

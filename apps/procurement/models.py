@@ -1,9 +1,15 @@
 """Procurement: Suppliers, Purchase Orders, Goods Receipts, Bills."""
 from decimal import Decimal
 from django.conf import settings
+from django.core.validators import RegexValidator
 from django.db import models
 
 from apps.inventory.models import Product, Warehouse
+
+validate_gstin = RegexValidator(
+    regex=r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$',
+    message='Enter a valid 15-character GSTIN, e.g. 29ABCDE1234F1Z5.',
+)
 
 
 def next_number(model, field, prefix):
@@ -23,6 +29,10 @@ class Supplier(models.Model):
     address = models.TextField(blank=True)
     city = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100, blank=True)
+    gstin = models.CharField(
+        max_length=15, blank=True, validators=[validate_gstin],
+        help_text='15-character GST Identification Number, e.g. 29ABCDE1234F1Z5 — required for GST input tax credit on Indian purchase records/bills.',
+    )
     payment_terms = models.CharField(max_length=100, blank=True)
     rating = models.PositiveSmallIntegerField(default=0, help_text='1-5 stars')
     is_active = models.BooleanField(default=True)

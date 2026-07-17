@@ -14,6 +14,31 @@ from django_filters.rest_framework import DjangoFilterBackend
 from .models import Quotation, QuotationItem, SalesOrder, SalesOrderItem
 from .serializers import QuotationSerializer, QuotationItemSerializer, SalesOrderSerializer
 from apps.mlm.models import Distributor, generate_commission_for_order
+from apps.inventory.models import StockMovement, Warehouse
+
+
+def generate_stock_out_for_order(order, user=None):
+    """Books one 'out' StockMovement per line item the first time a SalesOrder reaches
+    'confirmed' or 'fulfilled' — idempotent via reference=order.number (mirrors
+    _create_goods_receipt's use of receipt_number), so re-saving an already-confirmed
+    order never double-books. Skips line items with no product (free-text-only rows)."""
+    if order.status not in ('confirmed', 'fulfilled'):
+        return
+    if StockMovement.objects.filter(reference=order.number, type='out').exists():
+        return
+    warehouse = Warehouse.objects.filter(is_active=True).first() or Warehouse.objects.first()
+    if not warehouse:
+        return
+    now = timezone.now()
+    for item in order.items.select_related('product').all():
+        if not item.product_id or not item.quantity or item.quantity <= 0:
+            continue
+        StockMovement.objects.create(
+            type='out', product=item.product, warehouse=warehouse, quantity=item.quantity,
+            reference=order.number, reason=f'Sales Order {order.number}', occurred_at=now,
+            notes='Auto-booked when the order was confirmed.',
+            created_by=user if user and getattr(user, 'is_authenticated', False) else None,
+        )
 
 
 class QuotationViewSet(viewsets.ModelViewSet):
@@ -106,13 +131,18 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         if order.status == 'confirmed' and order.distributor_id:
             generate_commission_for_order(order)
 
+    def _maybe_book_stock_out(self, order, user=None):
+        generate_stock_out_for_order(order, user=user)
+
     def perform_create(self, serializer):
         order = serializer.save()
         self._maybe_generate_commission(order)
+        self._maybe_book_stock_out(order, user=self.request.user)
 
     def perform_update(self, serializer):
         order = serializer.save()
         self._maybe_generate_commission(order)
+        self._maybe_book_stock_out(order, user=self.request.user)
 
     @action(detail=True, methods=['put', 'patch'], url_path='status')
     def update_status(self, request, pk=None):
@@ -127,6 +157,7 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
         order.status = new_status
         order.save(update_fields=['status'])
         self._maybe_generate_commission(order)
+        self._maybe_book_stock_out(order, user=request.user)
         return Response(SalesOrderSerializer(order).data)
 
     @action(detail=False, methods=['get'], url_path='salespeople')

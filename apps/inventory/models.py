@@ -84,7 +84,11 @@ class StockMovement(models.Model):
     warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name='stock_movements')
     quantity = models.DecimalField(max_digits=12, decimal_places=2)
     reference = models.CharField(max_length=120, blank=True)
-    reason = models.CharField(max_length=200, blank=True, default='')
+    # Mandatory — every movement must record why it happened. No blank=True and no default:
+    # DRF's ModelSerializer only treats a field as optional when the model field is blank=True
+    # or has a default, so leaving both off makes every API/admin path require it, closing the
+    # gap that let movements end up with no reason.
+    reason = models.CharField(max_length=200)
     occurred_at = models.DateTimeField()
     notes = models.TextField(blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='stock_movements_created')
