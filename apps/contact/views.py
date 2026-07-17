@@ -36,6 +36,8 @@ QUALIFICATION_FIELDS = [
     ('Country', 'country'),
     ('Plan Interest', 'plan_interest'),
     ('Team Size', 'team_size'),
+    ('Timeline', 'timeline'),
+    ('ERP Modules of Interest', 'erp_modules'),
     ('Budget', 'budget_range'),
     ('Current Tech Stack', 'tech_stack'),
     ('Deployment Environment', 'deployment_env'),
