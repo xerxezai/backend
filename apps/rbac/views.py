@@ -83,6 +83,8 @@ class UserManagementView(APIView):
             first_name=name_parts[0],
             last_name=name_parts[1] if len(name_parts) > 1 else '',
         )
+        user.is_active = True
+        user.save()
         role = data['role']
         if role == 'super_admin':
             user.is_superuser = True
