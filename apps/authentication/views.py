@@ -33,10 +33,18 @@ from rest_framework.parsers import MultiPartParser, FormParser
 
 def _user_payload(user):
     """Build the standard login/me response dict."""
+    # Prefer the real RBAC role (super_admin/module_admin/regular_user/read_only);
+    # the legacy profile.role field labels nearly everyone 'admin'/'super_admin'.
     try:
-        role = user.profile.role
+        from apps.rbac.utils import get_user_role
+        role = get_user_role(user)
     except Exception:
-        role = 'admin'
+        role = 'no_access'
+    if role == 'no_access':
+        try:
+            role = user.profile.role
+        except Exception:
+            role = 'user'
     return {
         'id': user.id,
         'username': user.username,
