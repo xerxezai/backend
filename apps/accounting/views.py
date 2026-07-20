@@ -18,6 +18,7 @@ from apps.core.mixins import ProtectedDestroyMixin
 from apps.invoicing.models import Invoice
 from apps.procurement.models import PurchaseOrder, Bill
 from apps.rbac.utils import filter_queryset_by_role
+from apps.rbac.mixins import RBACScopedMixin
 
 from .models import Account, JournalEntry, JournalLine, Expense, next_number
 from .serializers import AccountSerializer, JournalEntrySerializer, JournalLineSerializer, ExpenseSerializer
@@ -33,7 +34,8 @@ class AccountViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
     filterset_fields = ['type', 'is_active']
 
 
-class JournalEntryViewSet(viewsets.ModelViewSet):
+class JournalEntryViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'accounting'
     queryset = JournalEntry.objects.prefetch_related('lines__account').all()
     serializer_class = JournalEntrySerializer
     authentication_classes = [JWTAuthentication]
@@ -44,7 +46,10 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
     ordering_fields = ['date', 'created_at']
 
 
-class JournalLineViewSet(viewsets.ModelViewSet):
+class JournalLineViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'accounting'
+    rbac_user_field = 'entry__created_by'   # lines are owned via their journal entry
+    rbac_stamp_created_by = False
     queryset = JournalLine.objects.select_related('entry', 'account').all()
     serializer_class = JournalLineSerializer
     authentication_classes = [JWTAuthentication]
@@ -53,7 +58,8 @@ class JournalLineViewSet(viewsets.ModelViewSet):
     filterset_fields = ['entry', 'account']
 
 
-class ExpenseViewSet(viewsets.ModelViewSet):
+class ExpenseViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'accounting'
     queryset = Expense.objects.all()
     serializer_class = ExpenseSerializer
     authentication_classes = [JWTAuthentication]
@@ -67,15 +73,13 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         'date': ['exact', 'gte', 'lte'],
     }
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        return filter_queryset_by_role(qs, self.request.user, 'accounting')
-
     def perform_create(self, serializer):
+        self._rbac_block_read_only()
         serializer.save(expense_number=next_number(Expense, 'expense_number', 'EXP'), created_by=self.request.user)
 
     @action(detail=True, methods=['put'], url_path='approve')
     def approve(self, request, pk=None):
+        self._rbac_block_read_only()
         expense = self.get_object()
         new_status = request.data.get('status') or 'approved'
         if new_status not in ('approved', 'rejected'):
@@ -137,16 +141,17 @@ class TaxReportView(APIView):
         period_type = request.query_params.get('period', 'monthly')
         start, end, label = _period_window(period_type, request.query_params.get('year'), request.query_params.get('month'))
 
-        paid_invoices = Invoice.objects.filter(status='paid', issue_date__gte=start, issue_date__lt=end)
+        invoices_qs = filter_queryset_by_role(Invoice.objects.all(), request.user, 'accounting')
+        paid_invoices = invoices_qs.filter(status='paid', issue_date__gte=start, issue_date__lt=end)
         total_revenue = paid_invoices.aggregate(t=Sum('total'))['t'] or Decimal('0')
         total_tax_collected = paid_invoices.aggregate(t=Sum('tax'))['t'] or Decimal('0')
 
         # Purchase orders don't track tax separately from their line-item totals, so we back
         # GST out of the PO total treating it as tax-inclusive (18% GST => tax = total * 18/118).
         # This is a simplification given the data model, not a real tax-paid figure.
-        po_total = PurchaseOrder.objects.filter(order_date__gte=start, order_date__lt=end).exclude(
-            status='cancelled'
-        ).aggregate(t=Sum('total'))['t'] or Decimal('0')
+        po_total = filter_queryset_by_role(PurchaseOrder.objects.all(), request.user, 'accounting').filter(
+            order_date__gte=start, order_date__lt=end,
+        ).exclude(status='cancelled').aggregate(t=Sum('total'))['t'] or Decimal('0')
         total_tax_paid = (po_total * Decimal('0.18') / Decimal('1.18')).quantize(Decimal('0.01'))
 
         net_tax = total_tax_collected - total_tax_paid
@@ -171,17 +176,22 @@ class BalanceSheetView(APIView):
     def get(self, request):
         from apps.invoicing.models import Payment
 
-        outstanding_invoices = Invoice.objects.filter(status__in=['sent', 'partial', 'overdue'])
+        invoices_qs = filter_queryset_by_role(Invoice.objects.all(), request.user, 'accounting')
+        outstanding_invoices = invoices_qs.filter(status__in=['sent', 'partial', 'overdue'])
         accounts_receivable = (outstanding_invoices.aggregate(t=Sum('total'))['t'] or Decimal('0')) - \
             (outstanding_invoices.aggregate(p=Sum('amount_paid'))['p'] or Decimal('0'))
 
         # Proxy for cash position — total payments ever recorded. Not a true cash balance
         # (doesn't account for expenses/outflows), just the best signal available in this data model.
-        cash_and_bank = Payment.objects.aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        cash_and_bank = filter_queryset_by_role(
+            Payment.objects.all(), request.user, 'accounting', user_field='invoice__created_by',
+        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
 
         total_assets = accounts_receivable + cash_and_bank
 
-        accounts_payable = Bill.objects.filter(status='unpaid').aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        accounts_payable = filter_queryset_by_role(Bill.objects.all(), request.user, 'accounting').filter(
+            status='unpaid'
+        ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
         total_liabilities = accounts_payable
 
         retained_earnings = total_assets - total_liabilities
@@ -213,17 +223,20 @@ class AccountingDashboardView(APIView):
         today = timezone.now().date()
         month_start = today.replace(day=1)
 
-        paid_invoices_this_month = Invoice.objects.filter(status='paid', issue_date__gte=month_start)
+        invoices_qs = filter_queryset_by_role(Invoice.objects.all(), request.user, 'accounting')
+        expenses_qs = filter_queryset_by_role(Expense.objects.all(), request.user, 'accounting')
+
+        paid_invoices_this_month = invoices_qs.filter(status='paid', issue_date__gte=month_start)
         total_revenue_this_month = paid_invoices_this_month.aggregate(t=Sum('total'))['t'] or Decimal('0')
         tax_collected_this_month = paid_invoices_this_month.aggregate(t=Sum('tax'))['t'] or Decimal('0')
 
-        total_expenses_this_month = Expense.objects.filter(status='approved', date__gte=month_start).aggregate(
+        total_expenses_this_month = expenses_qs.filter(status='approved', date__gte=month_start).aggregate(
             t=Sum('amount')
         )['t'] or Decimal('0')
 
         net_profit_this_month = total_revenue_this_month - total_expenses_this_month
 
-        overdue_invoices_count = Invoice.objects.filter(due_date__lt=today).exclude(status__in=['paid', 'cancelled']).count()
+        overdue_invoices_count = invoices_qs.filter(due_date__lt=today).exclude(status__in=['paid', 'cancelled']).count()
 
         # Revenue vs expenses for the trailing 6 months (including the current one).
         months = []
@@ -234,16 +247,16 @@ class AccountingDashboardView(APIView):
         revenue_vs_expenses = []
         for m_start in months:
             m_end = m_start.replace(year=m_start.year + 1, month=1) if m_start.month == 12 else m_start.replace(month=m_start.month + 1)
-            rev = Invoice.objects.filter(status='paid', issue_date__gte=m_start, issue_date__lt=m_end).aggregate(
+            rev = invoices_qs.filter(status='paid', issue_date__gte=m_start, issue_date__lt=m_end).aggregate(
                 t=Sum('total')
             )['t'] or Decimal('0')
-            exp = Expense.objects.filter(status='approved', date__gte=m_start, date__lt=m_end).aggregate(
+            exp = expenses_qs.filter(status='approved', date__gte=m_start, date__lt=m_end).aggregate(
                 t=Sum('amount')
             )['t'] or Decimal('0')
             revenue_vs_expenses.append({'month': m_start.strftime('%b %Y'), 'revenue': float(rev), 'expenses': float(exp)})
 
         # Expense breakdown by category — all-time, since current-month data is likely sparse.
-        expense_breakdown_qs = Expense.objects.filter(status='approved').values('category').annotate(
+        expense_breakdown_qs = expenses_qs.filter(status='approved').values('category').annotate(
             total=Sum('amount')
         ).order_by('-total')
         expense_breakdown = [{'category': row['category'], 'total': float(row['total'] or 0)} for row in expense_breakdown_qs]

@@ -13,6 +13,8 @@ from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
 from apps.core.mixins import ProtectedDestroyMixin
+from apps.rbac.utils import filter_queryset_by_role
+from apps.rbac.mixins import RBACScopedMixin
 from .models import Invoice, InvoiceItem, Payment, RecurringInvoice, CreditNote
 from .serializers import (
     InvoiceSerializer, InvoiceItemSerializer, PaymentSerializer,
@@ -34,7 +36,8 @@ def sync_invoice_payment_status(invoice: Invoice):
     invoice.save(update_fields=['amount_paid', 'status'])
 
 
-class InvoiceViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
+class InvoiceViewSet(RBACScopedMixin, ProtectedDestroyMixin, viewsets.ModelViewSet):
+    rbac_module = 'sales'
     queryset = Invoice.objects.select_related('customer', 'sales_order').prefetch_related('items').all()
     serializer_class = InvoiceSerializer
     authentication_classes = [JWTAuthentication]
@@ -52,6 +55,7 @@ class InvoiceViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['put', 'post'], url_path='mark-paid')
     def mark_paid(self, request, pk=None):
+        self._rbac_block_read_only()
         invoice = self.get_object()
         balance = invoice.balance
         if balance > 0:
@@ -59,6 +63,7 @@ class InvoiceViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
                 invoice=invoice, amount=balance, method='other',
                 reference='Marked as paid', paid_at=timezone.now(),
                 notes='Full balance settled via "Mark as Paid".',
+                created_by=request.user,
             )
         sync_invoice_payment_status(invoice)
         invoice.refresh_from_db()
@@ -88,7 +93,10 @@ class InvoiceViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
         return response
 
 
-class InvoiceItemViewSet(viewsets.ModelViewSet):
+class InvoiceItemViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'sales'
+    rbac_user_field = 'invoice__created_by'   # items are owned via their parent invoice
+    rbac_stamp_created_by = False
     queryset = InvoiceItem.objects.select_related('invoice', 'product').all()
     serializer_class = InvoiceItemSerializer
     authentication_classes = [JWTAuthentication]
@@ -97,7 +105,9 @@ class InvoiceItemViewSet(viewsets.ModelViewSet):
     filterset_fields = ['invoice']
 
 
-class PaymentViewSet(viewsets.ModelViewSet):
+class PaymentViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'sales'
+    rbac_user_field = 'invoice__created_by'   # a payment is visible to whoever owns its invoice
     queryset = Payment.objects.select_related('invoice', 'invoice__customer').all()
     serializer_class = PaymentSerializer
     authentication_classes = [JWTAuthentication]
@@ -115,14 +125,17 @@ class PaymentViewSet(viewsets.ModelViewSet):
     ordering_fields = ['paid_at', 'amount']
 
     def perform_create(self, serializer):
-        payment = serializer.save()
+        self._rbac_block_read_only()
+        payment = serializer.save(created_by=self.request.user)
         sync_invoice_payment_status(payment.invoice)
 
     def perform_update(self, serializer):
+        self._rbac_block_read_only()
         payment = serializer.save()
         sync_invoice_payment_status(payment.invoice)
 
     def perform_destroy(self, instance):
+        self._rbac_block_read_only()
         invoice = instance.invoice
         instance.delete()
         sync_invoice_payment_status(invoice)
@@ -147,16 +160,19 @@ class InvoicingDashboardView(APIView):
         today = timezone.now().date()
         month_start = today.replace(day=1)
 
-        total_invoiced = Invoice.objects.exclude(status='cancelled').aggregate(t=Sum('total'))['t'] or Decimal('0')
-        total_paid = Payment.objects.aggregate(t=Sum('amount'))['t'] or Decimal('0')
-        total_paid_this_month = Payment.objects.filter(paid_at__date__gte=month_start).aggregate(t=Sum('amount'))['t'] or Decimal('0')
-        outstanding = Invoice.objects.filter(status__in=['sent', 'partial', 'overdue']).aggregate(
+        invoices_qs = filter_queryset_by_role(Invoice.objects.all(), request.user, 'sales')
+        payments_qs = filter_queryset_by_role(Payment.objects.all(), request.user, 'sales', user_field='invoice__created_by')
+
+        total_invoiced = invoices_qs.exclude(status='cancelled').aggregate(t=Sum('total'))['t'] or Decimal('0')
+        total_paid = payments_qs.aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        total_paid_this_month = payments_qs.filter(paid_at__date__gte=month_start).aggregate(t=Sum('amount'))['t'] or Decimal('0')
+        outstanding = invoices_qs.filter(status__in=['sent', 'partial', 'overdue']).aggregate(
             t=Sum('total')
         )['t'] or Decimal('0')
-        outstanding -= Invoice.objects.filter(status__in=['sent', 'partial', 'overdue']).aggregate(
+        outstanding -= invoices_qs.filter(status__in=['sent', 'partial', 'overdue']).aggregate(
             p=Sum('amount_paid')
         )['p'] or Decimal('0')
-        overdue_count = Invoice.objects.filter(due_date__lt=today).exclude(status__in=['paid', 'cancelled']).count()
+        overdue_count = invoices_qs.filter(due_date__lt=today).exclude(status__in=['paid', 'cancelled']).count()
 
         return Response({
             'total_invoiced': str(total_invoiced),
@@ -167,7 +183,8 @@ class InvoicingDashboardView(APIView):
         })
 
 
-class RecurringInvoiceViewSet(viewsets.ModelViewSet):
+class RecurringInvoiceViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'sales'
     queryset = RecurringInvoice.objects.select_related('customer').all()
     serializer_class = RecurringInvoiceSerializer
     authentication_classes = [JWTAuthentication]
@@ -207,7 +224,8 @@ class RecurringInvoiceViewSet(viewsets.ModelViewSet):
         return Response(RecurringInvoiceSerializer(template).data)
 
 
-class CreditNoteViewSet(viewsets.ModelViewSet):
+class CreditNoteViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'sales'
     queryset = CreditNote.objects.select_related('customer', 'invoice').all()
     serializer_class = CreditNoteSerializer
     authentication_classes = [JWTAuthentication]
@@ -219,6 +237,7 @@ class CreditNoteViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='apply')
     def apply(self, request, pk=None):
+        self._rbac_block_read_only()
         credit_note = self.get_object()
         try:
             credit_note.apply()
@@ -228,11 +247,12 @@ class CreditNoteViewSet(viewsets.ModelViewSet):
         return Response(CreditNoteSerializer(credit_note).data)
 
 
-def _reports_summary():
+def _reports_summary(user=None):
     today = timezone.now().date()
     month_start = today.replace(day=1)
     year_start = today.replace(month=1, day=1)
-    paid = Invoice.objects.filter(status='paid')
+    invoices = filter_queryset_by_role(Invoice.objects.all(), user, 'sales') if user is not None else Invoice.objects.all()
+    paid = invoices.filter(status='paid')
     return {
         'total_revenue_month': paid.filter(issue_date__gte=month_start).aggregate(t=Sum('total'))['t'] or Decimal('0'),
         'total_revenue_year': paid.filter(issue_date__gte=year_start).aggregate(t=Sum('total'))['t'] or Decimal('0'),
@@ -249,9 +269,10 @@ class InvoicingReportsView(APIView):
 
     def get(self, request):
         today = timezone.now().date()
-        summary = _reports_summary()
-        outstanding_qs = Invoice.objects.filter(status__in=['sent', 'partial', 'overdue']).select_related('customer')
-        overdue_qs = Invoice.objects.filter(due_date__lt=today).exclude(status__in=['paid', 'cancelled']).select_related('customer')
+        summary = _reports_summary(request.user)
+        invoices_qs = filter_queryset_by_role(Invoice.objects.all(), request.user, 'sales')
+        outstanding_qs = invoices_qs.filter(status__in=['sent', 'partial', 'overdue']).select_related('customer')
+        overdue_qs = invoices_qs.filter(due_date__lt=today).exclude(status__in=['paid', 'cancelled']).select_related('customer')
         return Response({
             **{k: str(v) for k, v in summary.items()},
             'outstanding_invoices': InvoiceSerializer(outstanding_qs, many=True).data,
@@ -266,6 +287,7 @@ class InvoicingReportsExportView(APIView):
     def get(self, request):
         report_type = request.query_params.get('type', 'all')
         today = timezone.now().date()
+        invoices_qs = filter_queryset_by_role(Invoice.objects.all(), request.user, 'sales')
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = f'attachment; filename="invoicing-report-{report_type}-{today}.csv"'
         writer = csv.writer(response)
@@ -273,19 +295,19 @@ class InvoicingReportsExportView(APIView):
         if report_type in ('outstanding', 'all'):
             writer.writerow(['Outstanding Invoices'])
             writer.writerow(['Number', 'Customer', 'Issue Date', 'Due Date', 'Status', 'Total', 'Balance'])
-            for inv in Invoice.objects.filter(status__in=['sent', 'partial', 'overdue']).select_related('customer'):
+            for inv in invoices_qs.filter(status__in=['sent', 'partial', 'overdue']).select_related('customer'):
                 writer.writerow([inv.number, inv.customer.name, inv.issue_date, inv.due_date, inv.status, inv.total, inv.balance])
             writer.writerow([])
 
         if report_type in ('overdue', 'all'):
             writer.writerow(['Overdue Invoices'])
             writer.writerow(['Number', 'Customer', 'Issue Date', 'Due Date', 'Status', 'Total', 'Balance'])
-            for inv in Invoice.objects.filter(due_date__lt=today).exclude(status__in=['paid', 'cancelled']).select_related('customer'):
+            for inv in invoices_qs.filter(due_date__lt=today).exclude(status__in=['paid', 'cancelled']).select_related('customer'):
                 writer.writerow([inv.number, inv.customer.name, inv.issue_date, inv.due_date, inv.status, inv.total, inv.balance])
             writer.writerow([])
 
         if report_type in ('summary', 'all'):
-            summary = _reports_summary()
+            summary = _reports_summary(request.user)
             writer.writerow(['Summary'])
             writer.writerow(['Metric', 'Value'])
             writer.writerow(['Total Revenue (This Month)', summary['total_revenue_month']])

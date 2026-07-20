@@ -1,4 +1,5 @@
 """Logistics: Shipments, Deliveries, Warehouses, Tracking."""
+from django.conf import settings
 from django.db import models
 from apps.sales.models import SalesOrder
 from apps.crm.models import Customer
@@ -40,6 +41,10 @@ class Shipment(models.Model):
     delivered_at = models.DateTimeField(null=True, blank=True)
     actual_delivery = models.DateField(null=True, blank=True)
     notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -76,6 +81,10 @@ class Delivery(models.Model):
     signature = models.CharField(max_length=255, blank=True, help_text='Free-text signature capture (no file upload)')
     notes = models.TextField(blank=True)
     status = models.CharField(max_length=10, choices=STATUS, default='delivered')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

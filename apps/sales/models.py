@@ -25,6 +25,10 @@ class Quotation(models.Model):
     subtotal = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     tax = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

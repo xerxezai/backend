@@ -1,6 +1,7 @@
 """Invoicing & Payments models."""
 from datetime import timedelta
 from decimal import Decimal
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
@@ -40,6 +41,10 @@ class Invoice(models.Model):
     total = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     amount_paid = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -92,6 +97,10 @@ class Payment(models.Model):
     reference = models.CharField(max_length=120, blank=True)
     paid_at = models.DateTimeField()
     notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
 
     class Meta:
         ordering = ['-paid_at']
@@ -118,6 +127,10 @@ class RecurringInvoice(models.Model):
     status = models.CharField(max_length=10, choices=STATUS, default='active')
     last_generated_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -150,6 +163,7 @@ class RecurringInvoice(models.Model):
             due_date=today + timedelta(days=30),
             status='draft',
             notes=f'Auto-generated from recurring invoice #{self.id} ({self.get_frequency_display()}).',
+            created_by=self.created_by,  # generated invoices belong to the template's owner
         )
         InvoiceItem.objects.create(
             invoice=invoice,
@@ -179,6 +193,10 @@ class CreditNote(models.Model):
     date = models.DateField()
     status = models.CharField(max_length=10, choices=STATUS, default='issued')
     notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

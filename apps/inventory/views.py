@@ -239,6 +239,11 @@ class StockMovementViewSet(viewsets.ModelViewSet):
     }
     ordering_fields = ['occurred_at']
 
+    def get_queryset(self):
+        # Inventory sits under the Procurement module in this ERP's RBAC scheme.
+        from apps.rbac.utils import filter_queryset_by_role
+        return filter_queryset_by_role(super().get_queryset(), self.request.user, 'procurement')
+
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user if self.request.user.is_authenticated else None)
 

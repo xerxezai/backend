@@ -17,6 +17,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from apps.core.mixins import ProtectedDestroyMixin
 from apps.rbac.utils import filter_queryset_by_role
+from apps.rbac.mixins import RBACScopedMixin
 from .models import Customer, Contact, Lead, Activity, Deal, CustomerNote
 from .serializers import (
     CustomerSerializer, ContactSerializer, LeadSerializer, ActivitySerializer,
@@ -24,7 +25,8 @@ from .serializers import (
 )
 
 
-class CustomerViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
+class CustomerViewSet(RBACScopedMixin, ProtectedDestroyMixin, viewsets.ModelViewSet):
+    rbac_module = 'crm'
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
     authentication_classes = [JWTAuthentication]
@@ -42,10 +44,7 @@ class CustomerViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
         tag = self.request.query_params.get('tag')
         if tag:
             qs = qs.filter(tags__contains=[tag])
-        return filter_queryset_by_role(qs, self.request.user, 'crm')
-
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        return self.rbac_scope(qs)
 
     @action(detail=True, methods=['get', 'post'], url_path='notes')
     def notes(self, request, pk=None):
@@ -148,7 +147,8 @@ class CustomerViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
         return response
 
 
-class ContactViewSet(viewsets.ModelViewSet):
+class ContactViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'crm'
     queryset = Contact.objects.select_related('customer').all()
     serializer_class = ContactSerializer
     authentication_classes = [JWTAuthentication]
@@ -158,7 +158,8 @@ class ContactViewSet(viewsets.ModelViewSet):
     filterset_fields = ['customer', 'is_primary']
 
 
-class LeadViewSet(viewsets.ModelViewSet):
+class LeadViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'crm'
     queryset = Lead.objects.select_related('assigned_to', 'customer').all()
     serializer_class = LeadSerializer
     authentication_classes = [JWTAuthentication]
@@ -167,13 +168,6 @@ class LeadViewSet(viewsets.ModelViewSet):
     search_fields = ['name', 'company', 'email']
     filterset_fields = ['status', 'source', 'score', 'assigned_to']
     ordering_fields = ['created_at', 'estimated_value', 'follow_up_date']
-
-    def get_queryset(self):
-        qs = super().get_queryset()
-        return filter_queryset_by_role(qs, self.request.user, 'crm')
-
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
 
     @action(detail=True, methods=['get', 'post'], url_path='notes')
     def notes(self, request, pk=None):
@@ -219,7 +213,8 @@ class LeadViewSet(viewsets.ModelViewSet):
         return Response({'customer': CustomerSerializer(customer).data, 'lead': LeadSerializer(lead).data}, status=status.HTTP_201_CREATED)
 
 
-class ActivityViewSet(viewsets.ModelViewSet):
+class ActivityViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'crm'
     queryset = Activity.objects.select_related('user', 'lead', 'customer').all()
     serializer_class = ActivitySerializer
     authentication_classes = [JWTAuthentication]
@@ -254,7 +249,8 @@ class ActivityViewSet(viewsets.ModelViewSet):
         return Response(ActivitySerializer(qs, many=True).data)
 
 
-class DealViewSet(viewsets.ModelViewSet):
+class DealViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'crm'
     queryset = Deal.objects.select_related('customer', 'lead', 'assigned_to').all()
     serializer_class = DealSerializer
     authentication_classes = [JWTAuthentication]
@@ -279,7 +275,7 @@ class DealViewSet(viewsets.ModelViewSet):
             qs = qs.filter(stage='lost')
         elif outcome == 'pending':
             qs = qs.exclude(stage__in=['won', 'lost'])
-        return qs
+        return qs  # super().get_queryset() already applied rbac_scope via the mixin
 
     @action(detail=True, methods=['put', 'patch'], url_path='stage')
     def update_stage(self, request, pk=None):
@@ -291,9 +287,10 @@ class DealViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='pipeline-stats')
     def pipeline_stats(self, request):
+        deals_qs = self.get_queryset()
         by_stage = {
             row['stage']: {'count': row['count'], 'value': float(row['total'] or 0)}
-            for row in Deal.objects.values('stage').annotate(count=Count('id'), total=Sum('value'))
+            for row in deals_qs.values('stage').annotate(count=Count('id'), total=Sum('value'))
         }
         for stage_key, _ in Deal.STAGE_CHOICES:
             by_stage.setdefault(stage_key, {'count': 0, 'value': 0.0})
@@ -303,7 +300,7 @@ class DealViewSet(viewsets.ModelViewSet):
         decided = won_count + lost_count
         win_rate = round((won_count / decided) * 100, 1) if decided else 0.0
 
-        total_pipeline_value = Deal.objects.exclude(stage='lost').aggregate(
+        total_pipeline_value = deals_qs.exclude(stage='lost').aggregate(
             t=Sum('value')
         )['t'] or Decimal('0')
 
@@ -324,14 +321,18 @@ class PipelineView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        deals = Deal.objects.select_related('customer', 'lead', 'assigned_to').all()
+        deals = filter_queryset_by_role(
+            Deal.objects.select_related('customer', 'lead', 'assigned_to').all(),
+            request.user, 'crm',
+        )
         grouped: dict = {key: [] for key, _ in Deal.STAGE_CHOICES}
         for d in deals:
             grouped.setdefault(d.stage, []).append(DealSerializer(d).data)
         return Response(grouped)
 
 
-class CustomerNoteViewSet(viewsets.ModelViewSet):
+class CustomerNoteViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'crm'
     queryset = CustomerNote.objects.select_related('customer', 'lead', 'created_by').all()
     serializer_class = CustomerNoteSerializer
     authentication_classes = [JWTAuthentication]

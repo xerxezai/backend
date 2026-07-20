@@ -39,12 +39,17 @@ def has_module_access(user, module_name):
 
 
 def filter_queryset_by_role(queryset, user, module_name, user_field='created_by'):
-    role = get_user_role(user, module_name)
-    if role == 'super_admin':
-        # Sees everything
+    """Global data-isolation rule: only super_admin sees everything; every other
+    authenticated user (module_admin, regular_user, read_only) sees only records
+    they own via `user_field` (default created_by; use e.g. 'quotation__created_by'
+    for child rows owned through their parent)."""
+    if not user or not user.is_authenticated:
+        return queryset.none()
+    if user.is_superuser:
         return queryset
-    if role in ('module_admin', 'regular_user', 'read_only'):
-        # Module Admin, Regular User and Read Only all see only their own data
+    if get_user_role(user, module_name) == 'super_admin':
+        return queryset
+    try:
         return queryset.filter(**{user_field: user})
-    # No access
-    return queryset.none()
+    except Exception:
+        return queryset.none()

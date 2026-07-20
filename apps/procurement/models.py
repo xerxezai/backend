@@ -36,6 +36,10 @@ class Supplier(models.Model):
     payment_terms = models.CharField(max_length=100, blank=True)
     rating = models.PositiveSmallIntegerField(default=0, help_text='1-5 stars')
     is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -100,6 +104,10 @@ class GoodsReceipt(models.Model):
     received_date = models.DateField()
     received_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='goods_receipts_received')
     notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -132,6 +140,10 @@ class Bill(models.Model):
     amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     status = models.CharField(max_length=10, choices=STATUS, default='unpaid')
     notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

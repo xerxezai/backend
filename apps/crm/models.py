@@ -48,6 +48,10 @@ class Contact(models.Model):
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=40, blank=True, validators=[validate_phone_with_country_code])
     is_primary = models.BooleanField(default=False)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
 
     class Meta:
         ordering = ['-is_primary', 'name']
@@ -124,6 +128,10 @@ class Activity(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     lead = models.ForeignKey(Lead, null=True, blank=True, on_delete=models.CASCADE, related_name='activities')
     customer = models.ForeignKey(Customer, null=True, blank=True, on_delete=models.CASCADE, related_name='activities')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
 
     class Meta:
         ordering = ['-occurred_at']
@@ -166,6 +174,10 @@ class Deal(models.Model):
     )
     expected_close = models.DateField(null=True, blank=True)
     notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

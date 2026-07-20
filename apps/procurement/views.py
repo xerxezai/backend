@@ -16,6 +16,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from apps.core.mixins import ProtectedDestroyMixin
 from apps.inventory.models import Product, Warehouse, StockMovement
 from apps.rbac.utils import filter_queryset_by_role
+from apps.rbac.mixins import RBACScopedMixin
 from .models import Supplier, PurchaseOrder, PurchaseOrderItem, GoodsReceipt, GoodsReceiptItem, Bill, next_number
 from .serializers import (
     SupplierSerializer, PurchaseOrderSerializer, PurchaseOrderItemSerializer,
@@ -38,6 +39,7 @@ def _create_goods_receipt(*, purchase_order, received_date, notes, items_data, u
         received_date=received_date or timezone.now().date(),
         received_by=user if user and getattr(user, 'is_authenticated', False) else None,
         notes=notes or '',
+        created_by=user if user and getattr(user, 'is_authenticated', False) else None,
     )
     now = timezone.now()
     product_ids = [i.get('product') for i in items_data if i.get('product')]
@@ -63,7 +65,8 @@ def _create_goods_receipt(*, purchase_order, received_date, notes, items_data, u
     return receipt
 
 
-class SupplierViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
+class SupplierViewSet(RBACScopedMixin, ProtectedDestroyMixin, viewsets.ModelViewSet):
+    rbac_module = 'procurement'
     queryset = Supplier.objects.all()
     serializer_class = SupplierSerializer
     authentication_classes = [JWTAuthentication]
@@ -84,7 +87,8 @@ class SupplierViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
         return response
 
 
-class PurchaseOrderViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
+class PurchaseOrderViewSet(RBACScopedMixin, ProtectedDestroyMixin, viewsets.ModelViewSet):
+    rbac_module = 'procurement'
     queryset = PurchaseOrder.objects.select_related('supplier').prefetch_related('items__product').all()
     serializer_class = PurchaseOrderSerializer
     authentication_classes = [JWTAuthentication]
@@ -98,15 +102,9 @@ class PurchaseOrderViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
     }
     ordering_fields = ['order_date', 'total']
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        return filter_queryset_by_role(qs, self.request.user, 'procurement')
-
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
-
     @action(detail=True, methods=['put', 'post'], url_path='send')
     def send(self, request, pk=None):
+        self._rbac_block_read_only()
         po = self.get_object()
         if po.status in ('received', 'cancelled'):
             return Response(
@@ -119,6 +117,7 @@ class PurchaseOrderViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='receive')
     def receive(self, request, pk=None):
+        self._rbac_block_read_only()
         po = self.get_object()
         if po.status == 'cancelled':
             return Response({'detail': 'Cannot receive goods for a cancelled purchase order.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -149,7 +148,10 @@ class PurchaseOrderViewSet(ProtectedDestroyMixin, viewsets.ModelViewSet):
         return response
 
 
-class PurchaseOrderItemViewSet(viewsets.ModelViewSet):
+class PurchaseOrderItemViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'procurement'
+    rbac_user_field = 'purchase_order__created_by'   # items are owned via their parent PO
+    rbac_stamp_created_by = False
     queryset = PurchaseOrderItem.objects.select_related('purchase_order', 'product').all()
     serializer_class = PurchaseOrderItemSerializer
     authentication_classes = [JWTAuthentication]
@@ -158,7 +160,8 @@ class PurchaseOrderItemViewSet(viewsets.ModelViewSet):
     filterset_fields = ['purchase_order']
 
 
-class GoodsReceiptViewSet(viewsets.ModelViewSet):
+class GoodsReceiptViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'procurement'
     queryset = GoodsReceipt.objects.select_related('purchase_order', 'purchase_order__supplier', 'received_by').prefetch_related('items__product').all()
     serializer_class = GoodsReceiptSerializer
     authentication_classes = [JWTAuthentication]
@@ -167,6 +170,7 @@ class GoodsReceiptViewSet(viewsets.ModelViewSet):
     filterset_fields = ['purchase_order']
 
     def create(self, request, *args, **kwargs):
+        self._rbac_block_read_only()
         po_id = request.data.get('purchase_order')
         try:
             po = PurchaseOrder.objects.get(pk=po_id)
@@ -188,11 +192,13 @@ class GoodsReceiptViewSet(viewsets.ModelViewSet):
         # receipt_number, the same value they were tagged with in _create_goods_receipt) so
         # deleting a receipt can't leave inventory overstated. The PO's status is left as
         # 'received' — reopening it isn't safe to infer automatically.
+        self._rbac_block_read_only()
         StockMovement.objects.filter(reference=instance.receipt_number, type='in', reason='Goods receipt').delete()
         instance.delete()
 
 
-class BillViewSet(viewsets.ModelViewSet):
+class BillViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'procurement'
     queryset = Bill.objects.select_related('supplier', 'purchase_order').all()
     serializer_class = BillSerializer
     authentication_classes = [JWTAuthentication]
@@ -209,6 +215,7 @@ class BillViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['put', 'post'], url_path='mark-paid')
     def mark_paid(self, request, pk=None):
+        self._rbac_block_read_only()
         bill = self.get_object()
         bill.status = 'paid'
         bill.save(update_fields=['status'])
@@ -234,16 +241,20 @@ class ProcurementDashboardView(APIView):
         today = timezone.now().date()
         month_start = today.replace(day=1)
 
-        total_orders = PurchaseOrder.objects.count()
-        pending_orders = PurchaseOrder.objects.filter(status__in=['draft', 'sent']).count()
-        total_spent_this_month = PurchaseOrder.objects.filter(order_date__gte=month_start).exclude(
+        pos_qs = filter_queryset_by_role(PurchaseOrder.objects.all(), request.user, 'procurement')
+        bills_qs = filter_queryset_by_role(Bill.objects.all(), request.user, 'procurement')
+        suppliers_qs = filter_queryset_by_role(Supplier.objects.all(), request.user, 'procurement')
+
+        total_orders = pos_qs.count()
+        pending_orders = pos_qs.filter(status__in=['draft', 'sent']).count()
+        total_spent_this_month = pos_qs.filter(order_date__gte=month_start).exclude(
             status='cancelled'
         ).aggregate(t=Sum('total'))['t'] or Decimal('0')
-        overdue_bills = Bill.objects.filter(status='unpaid', due_date__lt=today).count()
+        overdue_bills = bills_qs.filter(status='unpaid', due_date__lt=today).count()
 
-        recent_orders = PurchaseOrder.objects.select_related('supplier').order_by('-order_date', '-id')[:8]
+        recent_orders = pos_qs.select_related('supplier').order_by('-order_date', '-id')[:8]
 
-        top_suppliers_qs = Supplier.objects.annotate(
+        top_suppliers_qs = suppliers_qs.annotate(
             spend=Sum('purchase_orders__total', filter=~Q(purchase_orders__status='cancelled'))
         ).filter(spend__isnull=False).order_by('-spend')[:5]
         top_suppliers = [{'id': s.id, 'name': s.name, 'spend': float(s.spend or 0)} for s in top_suppliers_qs]
@@ -257,7 +268,7 @@ class ProcurementDashboardView(APIView):
         monthly_spending = []
         for m_start in months:
             m_end = m_start.replace(year=m_start.year + 1, month=1) if m_start.month == 12 else m_start.replace(month=m_start.month + 1)
-            total = PurchaseOrder.objects.filter(order_date__gte=m_start, order_date__lt=m_end).exclude(
+            total = pos_qs.filter(order_date__gte=m_start, order_date__lt=m_end).exclude(
                 status='cancelled'
             ).aggregate(t=Sum('total'))['t'] or Decimal('0')
             monthly_spending.append({'month': m_start.strftime('%b %Y'), 'total': float(total)})

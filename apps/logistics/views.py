@@ -11,6 +11,8 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
+from apps.rbac.utils import filter_queryset_by_role
+from apps.rbac.mixins import RBACScopedMixin
 from .models import Shipment, TrackingUpdate, Delivery, Warehouse
 from .serializers import ShipmentSerializer, TrackingUpdateSerializer, DeliverySerializer, WarehouseSerializer
 
@@ -30,10 +32,14 @@ def generate_delivery_for_shipment(shipment, user=None):
         delivered_by=delivered_by,
         status='delivered',
         notes='Auto-recorded when the shipment was marked delivered.',
+        # The delivery belongs to whoever owns the shipment, so the same user keeps
+        # seeing it on the Deliveries page under the own-data-only rule.
+        created_by=shipment.created_by,
     )
 
 
-class ShipmentViewSet(viewsets.ModelViewSet):
+class ShipmentViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'logistics'
     queryset = Shipment.objects.select_related('customer', 'sales_order').prefetch_related('tracking_updates').all()
     serializer_class = ShipmentSerializer
     authentication_classes = [JWTAuthentication]
@@ -45,6 +51,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['put'], url_path='status')
     def status_update(self, request, pk=None):
+        self._rbac_block_read_only()
         shipment = self.get_object()
         new_status = request.data.get('status')
         valid_statuses = dict(Shipment.STATUS)
@@ -82,7 +89,10 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         return response
 
 
-class TrackingUpdateViewSet(viewsets.ModelViewSet):
+class TrackingUpdateViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'logistics'
+    rbac_user_field = 'shipment__created_by'   # tracking rows are owned via their shipment
+    rbac_stamp_created_by = False
     queryset = TrackingUpdate.objects.select_related('shipment').all()
     serializer_class = TrackingUpdateSerializer
     authentication_classes = [JWTAuthentication]
@@ -92,7 +102,8 @@ class TrackingUpdateViewSet(viewsets.ModelViewSet):
     ordering_fields = ['occurred_at']
 
 
-class DeliveryViewSet(viewsets.ModelViewSet):
+class DeliveryViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'logistics'
     queryset = Delivery.objects.select_related('shipment', 'shipment__customer').all()
     serializer_class = DeliverySerializer
     authentication_classes = [JWTAuthentication]
@@ -130,24 +141,26 @@ class LogisticsDashboardView(APIView):
     def get(self, request):
         today = timezone.now().date()
 
-        total_shipments = Shipment.objects.count()
-        in_transit = Shipment.objects.filter(status='in_transit').count()
-        pending = Shipment.objects.filter(status='pending').count()
-        delivered_today = Shipment.objects.filter(status='delivered').filter(
+        shipments_qs = filter_queryset_by_role(Shipment.objects.all(), request.user, 'logistics')
+
+        total_shipments = shipments_qs.count()
+        in_transit = shipments_qs.filter(status='in_transit').count()
+        pending = shipments_qs.filter(status='pending').count()
+        delivered_today = shipments_qs.filter(status='delivered').filter(
             Q(actual_delivery=today) | Q(delivered_at__date=today)
         ).count()
 
-        delivered_with_dates = Shipment.objects.filter(
+        delivered_with_dates = shipments_qs.filter(
             status='delivered', estimated_delivery__isnull=False, actual_delivery__isnull=False,
         )
         denom = delivered_with_dates.count()
         on_time_count = sum(1 for s in delivered_with_dates if s.actual_delivery <= s.estimated_delivery)
         on_time_rate = round((on_time_count / denom) * 100, 1) if denom else 0.0
 
-        recent_shipments = Shipment.objects.select_related('customer').order_by('-created_at')[:8]
+        recent_shipments = shipments_qs.select_related('customer').order_by('-created_at')[:8]
 
         shipments_by_status = [
-            {'status': s_key, 'count': Shipment.objects.filter(status=s_key).count()}
+            {'status': s_key, 'count': shipments_qs.filter(status=s_key).count()}
             for s_key, _label in Shipment.STATUS
         ]
 

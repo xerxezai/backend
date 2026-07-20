@@ -39,6 +39,10 @@ class Distributor(models.Model):
     joining_date = models.DateField(default=timezone.localdate)
     total_sales = models.DecimalField(max_digits=14, decimal_places=2, default=0, help_text='Denormalized — updated when commissions are calculated')
     total_earnings = models.DecimalField(max_digits=14, decimal_places=2, default=0, help_text='Denormalized sum of this distributor\'s commission amounts')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -81,6 +85,10 @@ class Commission(models.Model):
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     status = models.CharField(max_length=10, choices=STATUS, default='pending')
     notes = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_date = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -141,6 +149,9 @@ def generate_commission_for_order(order):
 
     commission = Commission.objects.create(
         distributor=distributor, order=order, level=distributor.level, rate=rate, amount=amount, status='pending',
+        # Auto-generated commissions belong to whoever owns the originating sales order,
+        # so the same user keeps seeing them under the own-data-only rule.
+        created_by=order.created_by,
     )
     _recalc_distributor_totals(distributor)
     return commission
@@ -168,6 +179,10 @@ class Payout(models.Model):
     method = models.CharField(max_length=10, choices=METHOD, default='bank')
     reference_number = models.CharField(max_length=100, blank=True)
     status = models.CharField(max_length=12, choices=STATUS, default='pending')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s_created',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -190,6 +205,7 @@ def generate_payout_for_commission(commission: 'Commission'):
     return Payout.objects.create(
         distributor=commission.distributor, commission=commission, amount=commission.amount,
         payout_date=timezone.now().date(), status='pending',
+        created_by=commission.created_by,  # payout follows its commission's owner
     )
 
 

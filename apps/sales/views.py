@@ -16,6 +16,7 @@ from .serializers import QuotationSerializer, QuotationItemSerializer, SalesOrde
 from apps.mlm.models import Distributor, generate_commission_for_order
 from apps.inventory.models import StockMovement, Warehouse
 from apps.rbac.utils import filter_queryset_by_role
+from apps.rbac.mixins import RBACScopedMixin
 
 
 def generate_stock_out_for_order(order, user=None):
@@ -42,7 +43,8 @@ def generate_stock_out_for_order(order, user=None):
         )
 
 
-class QuotationViewSet(viewsets.ModelViewSet):
+class QuotationViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'sales'
     queryset = Quotation.objects.select_related('customer').prefetch_related('items').all()
     serializer_class = QuotationSerializer
     authentication_classes = [JWTAuthentication]
@@ -81,6 +83,7 @@ class QuotationViewSet(viewsets.ModelViewSet):
             tax=quotation.tax,
             total=quotation.total,
             notes=quotation.notes,
+            created_by=request.user,
         )
         # Carry the quotation's line items over so the order (and any invoice later
         # generated from it) has real items to total from, instead of falling back to
@@ -107,7 +110,10 @@ class QuotationViewSet(viewsets.ModelViewSet):
         return Response(QuotationSerializer(qs, many=True).data)
 
 
-class QuotationItemViewSet(viewsets.ModelViewSet):
+class QuotationItemViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'sales'
+    rbac_user_field = 'quotation__created_by'   # items are owned via their parent quotation
+    rbac_stamp_created_by = False
     queryset = QuotationItem.objects.select_related('quotation', 'product').all()
     serializer_class = QuotationItemSerializer
     authentication_classes = [JWTAuthentication]
@@ -116,7 +122,8 @@ class QuotationItemViewSet(viewsets.ModelViewSet):
     filterset_fields = ['quotation']
 
 
-class SalesOrderViewSet(viewsets.ModelViewSet):
+class SalesOrderViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'sales'
     queryset = SalesOrder.objects.select_related('customer', 'quotation', 'salesperson', 'distributor').all()
     serializer_class = SalesOrderSerializer
     authentication_classes = [JWTAuthentication]
@@ -135,16 +142,14 @@ class SalesOrderViewSet(viewsets.ModelViewSet):
     def _maybe_book_stock_out(self, order, user=None):
         generate_stock_out_for_order(order, user=user)
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        return filter_queryset_by_role(qs, self.request.user, 'sales')
-
     def perform_create(self, serializer):
+        self._rbac_block_read_only()
         order = serializer.save(created_by=self.request.user)
         self._maybe_generate_commission(order)
         self._maybe_book_stock_out(order, user=self.request.user)
 
     def perform_update(self, serializer):
+        self._rbac_block_read_only()
         order = serializer.save()
         self._maybe_generate_commission(order)
         self._maybe_book_stock_out(order, user=self.request.user)
@@ -192,15 +197,21 @@ class SalesDashboardView(APIView):
         today = timezone.now().date()
         month_start = today.replace(day=1)
 
-        total_sales_this_month = SalesOrder.objects.filter(
+        orders_qs = filter_queryset_by_role(SalesOrder.objects.all(), request.user, 'sales')
+        quotations_qs = filter_queryset_by_role(Quotation.objects.all(), request.user, 'sales')
+        quotation_items_qs = filter_queryset_by_role(
+            QuotationItem.objects.all(), request.user, 'sales', user_field='quotation__created_by',
+        )
+
+        total_sales_this_month = orders_qs.filter(
             order_date__gte=month_start, order_date__lte=today,
         ).aggregate(s=Sum('total'))['s'] or 0
-        total_quotations_this_month = Quotation.objects.filter(
+        total_quotations_this_month = quotations_qs.filter(
             issue_date__gte=month_start, issue_date__lte=today,
         ).count()
 
         top_5_customers = list(
-            SalesOrder.objects.values('customer_id', 'customer__name')
+            orders_qs.values('customer_id', 'customer__name')
             .annotate(revenue=Sum('total'))
             .order_by('-revenue')[:5]
         )
@@ -227,11 +238,11 @@ class SalesDashboardView(APIView):
             else:
                 ny, nm = (ms.year + 1, 1) if ms.month == 12 else (ms.year, ms.month + 1)
                 me = ms.replace(year=ny, month=nm)
-            total = SalesOrder.objects.filter(order_date__gte=ms, order_date__lt=me).aggregate(s=Sum('total'))['s'] or 0
+            total = orders_qs.filter(order_date__gte=ms, order_date__lt=me).aggregate(s=Sum('total'))['s'] or 0
             revenue_last_6_months.append({'month': ms.strftime('%b %Y'), 'revenue': float(total)})
 
         sales_by_product = list(
-            QuotationItem.objects.filter(product__isnull=False)
+            quotation_items_qs.filter(product__isnull=False)
             .values('product_id', 'product__name')
             .annotate(revenue=Sum('line_total'))
             .order_by('-revenue')[:10]

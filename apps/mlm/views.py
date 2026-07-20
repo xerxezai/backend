@@ -15,6 +15,8 @@ from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
 from apps.sales.models import SalesOrder
+from apps.rbac.utils import filter_queryset_by_role
+from apps.rbac.mixins import RBACScopedMixin
 from .models import Distributor, Commission, Payout, MLMSettings, next_number, generate_payout_for_commission
 from .serializers import (
     DistributorSerializer, CommissionSerializer, PayoutSerializer, MLMSettingsSerializer,
@@ -35,7 +37,8 @@ def _node(d: Distributor):
     }
 
 
-class DistributorViewSet(viewsets.ModelViewSet):
+class DistributorViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'mlm'
     queryset = Distributor.objects.select_related('sponsor', 'user').all()
     serializer_class = DistributorSerializer
     authentication_classes = [JWTAuthentication]
@@ -61,7 +64,8 @@ class DistributorViewSet(viewsets.ModelViewSet):
         return response
 
 
-class CommissionViewSet(viewsets.ModelViewSet):
+class CommissionViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'mlm'
     queryset = Commission.objects.select_related('distributor', 'order', 'order__customer').all()
     serializer_class = CommissionSerializer
     authentication_classes = [JWTAuthentication]
@@ -77,6 +81,7 @@ class CommissionViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], url_path='calculate')
     @transaction.atomic
     def calculate(self, request):
+        self._rbac_block_read_only()
         order_id = request.data.get('order')
         try:
             order = SalesOrder.objects.select_related('customer').get(pk=order_id)
@@ -104,6 +109,7 @@ class CommissionViewSet(viewsets.ModelViewSet):
             if amount > 0:
                 commission = Commission.objects.create(
                     distributor=current, order=order, level=level, rate=rate, amount=amount, status='pending',
+                    created_by=order.created_by or request.user,
                 )
                 created.append(commission)
                 Distributor.objects.filter(pk=current.pk).update(total_earnings=current.total_earnings + amount)
@@ -123,14 +129,15 @@ class CommissionViewSet(viewsets.ModelViewSet):
         """Approves each pending commission and auto-books its payout. queryset.update() skips
         save()/serializer hooks, so generate_payout_for_commission is called explicitly here —
         same reason CommissionSerializer.update() calls it too, for the direct-PATCH path."""
+        self._rbac_block_read_only()
         ids = request.data.get('ids') or []
-        qs = Commission.objects.filter(id__in=ids, status='pending')
+        qs = self.get_queryset().filter(id__in=ids, status='pending')
         to_approve = list(qs)
         qs.update(status='approved')
         for commission in to_approve:
             commission.status = 'approved'
             generate_payout_for_commission(commission)
-        updated = Commission.objects.filter(id__in=ids).select_related('distributor', 'order', 'order__customer')
+        updated = self.get_queryset().filter(id__in=ids).select_related('distributor', 'order', 'order__customer')
         return Response(CommissionSerializer(updated, many=True).data)
 
     @action(detail=False, methods=['get'], url_path='export-csv')
@@ -145,7 +152,8 @@ class CommissionViewSet(viewsets.ModelViewSet):
         return response
 
 
-class PayoutViewSet(viewsets.ModelViewSet):
+class PayoutViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'mlm'
     queryset = Payout.objects.select_related('distributor', 'commission', 'commission__order').all()
     serializer_class = PayoutSerializer
     authentication_classes = [JWTAuthentication]
@@ -156,6 +164,7 @@ class PayoutViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['put'], url_path='process')
     def process(self, request, pk=None):
+        self._rbac_block_read_only()
         payout = self.get_object()
         order_steps = ['pending', 'processing', 'completed']
         if payout.status == 'completed':
@@ -205,16 +214,20 @@ class MLMDashboardView(APIView):
         today = timezone.now().date()
         month_start = today.replace(day=1)
 
-        total_distributors = Distributor.objects.count()
-        active_distributors = Distributor.objects.filter(status='active').count()
+        distributors_qs = filter_queryset_by_role(Distributor.objects.all(), request.user, 'mlm')
+        commissions_qs = filter_queryset_by_role(Commission.objects.all(), request.user, 'mlm')
+        payouts_qs = filter_queryset_by_role(Payout.objects.all(), request.user, 'mlm')
+
+        total_distributors = distributors_qs.count()
+        active_distributors = distributors_qs.filter(status='active').count()
         # Counts all commissions created this month regardless of status (pending or paid) —
         # a consistent, simple definition since the spec allows either interpretation.
-        total_commissions_this_month = Commission.objects.filter(
+        total_commissions_this_month = commissions_qs.filter(
             created_date__gte=month_start
         ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
-        pending_payouts = Payout.objects.filter(status='pending').count()
+        pending_payouts = payouts_qs.filter(status='pending').count()
 
-        top_performers_qs = Distributor.objects.order_by('-total_earnings')[:5]
+        top_performers_qs = distributors_qs.order_by('-total_earnings')[:5]
         top_performers = [
             {
                 'id': d.id, 'distributor_id': d.distributor_id, 'name': d.name,
@@ -233,12 +246,12 @@ class MLMDashboardView(APIView):
         monthly_commissions = []
         for m_start in months:
             m_end = m_start.replace(year=m_start.year + 1, month=1) if m_start.month == 12 else m_start.replace(month=m_start.month + 1)
-            total = Commission.objects.filter(
+            total = commissions_qs.filter(
                 created_date__gte=m_start, created_date__lt=m_end,
             ).aggregate(t=Sum('amount'))['t'] or Decimal('0')
             monthly_commissions.append({'month': m_start.strftime('%b %Y'), 'total': float(total)})
 
-        by_level = {row['level']: row['total'] for row in Commission.objects.values('level').annotate(total=Sum('amount'))}
+        by_level = {row['level']: row['total'] for row in commissions_qs.values('level').annotate(total=Sum('amount'))}
         commission_by_level = [{'level': lvl, 'total': float(by_level.get(lvl) or 0)} for lvl in (1, 2, 3)]
 
         return Response({
