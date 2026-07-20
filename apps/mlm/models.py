@@ -17,6 +17,10 @@ def next_number(model, field, prefix):
 
 
 class Distributor(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('active', 'Active'),
         ('inactive', 'Inactive'),
@@ -73,6 +77,10 @@ class Distributor(models.Model):
 
 
 class Commission(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('pending', 'Pending'),
         ('approved', 'Approved'),
@@ -158,6 +166,10 @@ def generate_commission_for_order(order):
 
 
 class Payout(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('pending', 'Pending'),
         ('processing', 'Processing'),
@@ -211,6 +223,10 @@ def generate_payout_for_commission(commission: 'Commission'):
 
 class MLMSettings(models.Model):
     """Singleton config row — always pk=1, fetched via get_solo()."""
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     level1_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('10.00'))
     level2_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('5.00'))
     level3_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('2.00'))

@@ -15,6 +15,10 @@ def next_number(model, field, prefix):
 
 
 class Incident(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     TYPE = [
         ('near_miss', 'Near Miss'),
         ('first_aid', 'First Aid'),
@@ -68,6 +72,10 @@ class Incident(models.Model):
 
 
 class Inspection(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     TYPE = [
         ('safety', 'Safety'),
         ('quality', 'Quality'),
@@ -114,6 +122,10 @@ def risk_level_for_score(score: int) -> str:
 
 
 class RiskRegister(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     CATEGORY = [
         ('safety', 'Safety'),
         ('environmental', 'Environmental'),
@@ -164,6 +176,10 @@ class RiskRegister(models.Model):
 
 
 class SafetyChecklist(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     TYPE = [
         ('daily', 'Daily'),
         ('weekly', 'Weekly'),
@@ -193,6 +209,10 @@ class SafetyChecklist(models.Model):
 
 
 class ChecklistItem(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     ANSWER = [
         ('yes', 'Yes'),
         ('no', 'No'),
@@ -208,6 +228,10 @@ class ChecklistItem(models.Model):
 
 
 class ComplianceRecord(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     TYPE = [
         ('legal', 'Legal'),
         ('regulatory', 'Regulatory'),

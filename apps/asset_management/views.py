@@ -14,6 +14,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
+from apps.companies.mixins import CompanyScopedMixin
 from .models import Asset, MaintenanceRecord, AssetDepreciation
 from .serializers import AssetSerializer, MaintenanceRecordSerializer, AssetDepreciationSerializer
 
@@ -43,7 +44,7 @@ def sync_depreciation_for_asset(asset: Asset):
         opening = closing
 
 
-class AssetViewSet(viewsets.ModelViewSet):
+class AssetViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Asset.objects.select_related('assigned_to').all()
     serializer_class = AssetSerializer
     authentication_classes = [JWTAuthentication]
@@ -59,7 +60,7 @@ class AssetViewSet(viewsets.ModelViewSet):
         if request.method == 'POST':
             ser = MaintenanceRecordSerializer(data=request.data)
             ser.is_valid(raise_exception=True)
-            record = ser.save(asset=asset, created_by=request.user)
+            record = ser.save(asset=asset, created_by=request.user, company=asset.company)
             # A logged maintenance visit updates the asset's own maintenance-tracking fields —
             # single source of truth instead of the frontend having to keep both in sync.
             asset.last_maintenance = record.date
@@ -107,11 +108,11 @@ class AssetViewSet(viewsets.ModelViewSet):
         today = timezone.now().date()
         in_30_days = today + timezone.timedelta(days=30)
         month_start = today.replace(day=1)
-        qs = Asset.objects.all()
+        qs = self.get_queryset()
         total_value = qs.aggregate(t=Sum('current_value'))['t']
         if total_value is None:
             total_value = qs.aggregate(t=Sum('purchase_cost'))['t'] or Decimal('0')
-        maintenance_cost_this_month = MaintenanceRecord.objects.filter(
+        maintenance_cost_this_month = self.company_scope(MaintenanceRecord.objects.all()).filter(
             date__gte=month_start, date__lte=today,
         ).aggregate(t=Sum('cost'))['t'] or Decimal('0')
         return Response({
@@ -124,7 +125,7 @@ class AssetViewSet(viewsets.ModelViewSet):
         })
 
 
-class MaintenanceRecordViewSet(viewsets.ModelViewSet):
+class MaintenanceRecordViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = MaintenanceRecord.objects.select_related('asset', 'created_by').all()
     serializer_class = MaintenanceRecordSerializer
     authentication_classes = [JWTAuthentication]
@@ -133,7 +134,7 @@ class MaintenanceRecordViewSet(viewsets.ModelViewSet):
     filterset_fields = ['asset', 'maintenance_type']
 
 
-class AssetDepreciationViewSet(viewsets.ReadOnlyModelViewSet):
+class AssetDepreciationViewSet(CompanyScopedMixin, viewsets.ReadOnlyModelViewSet):
     queryset = AssetDepreciation.objects.select_related('asset').all()
     serializer_class = AssetDepreciationSerializer
     authentication_classes = [JWTAuthentication]

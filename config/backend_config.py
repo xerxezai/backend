@@ -221,6 +221,11 @@ class BackendConfig:
                 'rbac': {
                     'enabled': True,
                     'path': 'apps.rbac'
+                },
+                # ---- Multi-tenant companies ----
+                'companies': {
+                    'enabled': True,
+                    'path': 'apps.companies'
                 }
             },
             

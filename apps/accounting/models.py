@@ -15,6 +15,10 @@ def next_number(model, field, prefix):
 
 
 class Account(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     TYPE = [
         ('asset', 'Asset'),
         ('liability', 'Liability'),
@@ -36,6 +40,10 @@ class Account(models.Model):
 
 
 class JournalEntry(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     number = models.CharField(max_length=20, unique=True, help_text='e.g. JE-0001')
     date = models.DateField()
     description = models.CharField(max_length=255, blank=True)
@@ -62,6 +70,10 @@ class JournalEntry(models.Model):
 
 
 class JournalLine(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     entry = models.ForeignKey(JournalEntry, on_delete=models.CASCADE, related_name='lines')
     account = models.ForeignKey(Account, on_delete=models.PROTECT, related_name='journal_lines')
     debit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
@@ -73,6 +85,10 @@ class JournalLine(models.Model):
 
 
 class Expense(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('pending', 'Pending'),
         ('approved', 'Approved'),
@@ -102,6 +118,10 @@ class Expense(models.Model):
 class TaxReport(models.Model):
     """Saved/snapshotted tax report rows. The live GET /accounting/tax-report/ endpoint computes
     figures on the fly from Invoice/PurchaseOrder data and does not require a row here to exist."""
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     period = models.CharField(max_length=20, help_text='e.g. "2026-07" (monthly) or "2026-Q3" (quarterly)')
     total_revenue = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     total_tax_collected = models.DecimalField(max_digits=14, decimal_places=2, default=0)

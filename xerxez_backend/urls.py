@@ -78,6 +78,10 @@ api_patterns = [
     # codebase's single /api/v1/ prefix convention, not the standalone 'api/rbac/' path
     # given in the original spec.
     path('rbac/', include('apps.rbac.urls')),
+
+    # Multi-tenant companies — mounted under /api/v1/ (not the spec's standalone 'api/')
+    # for the same reason.
+    path('', include('apps.companies.urls')),
 ]
 
 

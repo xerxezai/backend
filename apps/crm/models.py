@@ -6,6 +6,15 @@ from apps.core.validators import validate_phone_with_country_code
 
 
 class Customer(models.Model):
+    # Named `tenant`, not `company` (unlike every other model's FK), because Customer
+    # already has a pre-existing `company` CharField below for the customer's own
+    # free-text company name (e.g. "Infosys Ltd") — reusing the name would silently
+    # shadow this FK. RBACScopedMixin.company_field is overridden to 'tenant' for this
+    # viewset accordingly.
+    tenant = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     SOURCE = [
         ('website', 'Website'),
         ('referral', 'Referral'),
@@ -42,6 +51,10 @@ class Customer(models.Model):
 
 
 class Contact(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='contacts')
     name = models.CharField(max_length=200)
     role = models.CharField(max_length=120, blank=True)
@@ -61,6 +74,12 @@ class Contact(models.Model):
 
 
 class Lead(models.Model):
+    # See Customer.tenant — same CharField collision (Lead also has a free-text
+    # `company` field below).
+    tenant = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('new', 'New'),
         ('contacted', 'Contacted'),
@@ -110,6 +129,10 @@ class Lead(models.Model):
 
 
 class Activity(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     TYPE = [
         ('call', 'Call'),
         ('email', 'Email'),
@@ -142,6 +165,10 @@ class Activity(models.Model):
 
 
 class Deal(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STAGE_CHOICES = [
         ('new', 'New'),
         ('contacted', 'Contacted'),
@@ -190,6 +217,10 @@ class Deal(models.Model):
 
 
 class CustomerNote(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     NOTE_TYPE_CHOICES = [
         ('call', 'Phone Call'),
         ('meeting', 'Meeting'),

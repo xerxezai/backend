@@ -23,6 +23,10 @@ def next_number(model, field, prefix):
 
 
 class Supplier(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     name = models.CharField(max_length=200)
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=40, blank=True)
@@ -50,6 +54,10 @@ class Supplier(models.Model):
 
 
 class PurchaseOrder(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('draft', 'Draft'),
         ('sent', 'Sent'),
@@ -80,6 +88,10 @@ class PurchaseOrder(models.Model):
 
 
 class PurchaseOrderItem(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL, related_name='procurement_po_items')
     quantity = models.DecimalField(max_digits=12, decimal_places=2, default=1)
@@ -95,6 +107,10 @@ class PurchaseOrderItem(models.Model):
 
 
 class GoodsReceipt(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     receipt_number = models.CharField(max_length=20, unique=True, help_text='e.g. GR-001')
     purchase_order = models.ForeignKey(PurchaseOrder, on_delete=models.PROTECT, related_name='goods_receipts')
     warehouse = models.ForeignKey(
@@ -118,6 +134,10 @@ class GoodsReceipt(models.Model):
 
 
 class GoodsReceiptItem(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     goods_receipt = models.ForeignKey(GoodsReceipt, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL, related_name='procurement_gr_items')
     quantity_received = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -127,6 +147,10 @@ class GoodsReceiptItem(models.Model):
 
 
 class Bill(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('unpaid', 'Unpaid'),
         ('paid', 'Paid'),

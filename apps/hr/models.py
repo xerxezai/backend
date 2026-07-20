@@ -6,6 +6,10 @@ from apps.core.validators import validate_phone_with_country_code
 
 
 class Department(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     code = models.CharField(max_length=20, unique=True)
     name = models.CharField(max_length=120, unique=True)
     manager = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='managed_departments')
@@ -19,6 +23,10 @@ class Department(models.Model):
 
 
 class Employee(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('active', 'Active'),
         ('on_leave', 'On Leave'),
@@ -48,6 +56,10 @@ class Employee(models.Model):
 
 
 class Attendance(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     ATTENDANCE_STATUS = [
         ('present', 'Present'),
         ('absent', 'Absent'),
@@ -72,6 +84,10 @@ class Attendance(models.Model):
 
 
 class LeaveRequest(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     TYPE = [
         ('annual', 'Annual'),
         ('sick', 'Sick'),
@@ -102,6 +118,10 @@ class LeaveRequest(models.Model):
 
 
 class Shift(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     name = models.CharField(max_length=100)
     start_time = models.TimeField()
     end_time = models.TimeField()
@@ -112,6 +132,10 @@ class Shift(models.Model):
 
 
 class SalaryStructure(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     employee = models.OneToOneField(Employee, on_delete=models.CASCADE, related_name='salary_structure')
     basic_salary = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     allowances = models.JSONField(default=dict, blank=True)
@@ -123,6 +147,10 @@ class SalaryStructure(models.Model):
 
 
 class Payroll(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('draft', 'Draft'),
         ('approved', 'Approved'),
@@ -154,6 +182,10 @@ class Payroll(models.Model):
 
 
 class PaySlip(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     payroll = models.OneToOneField(Payroll, on_delete=models.CASCADE, related_name='payslip')
     pdf_ref = models.CharField(max_length=255, blank=True)
     generated_at = models.DateTimeField(auto_now_add=True)
@@ -168,6 +200,10 @@ class PaySlip(models.Model):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PerformanceReview(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     RATING_CHOICES = [(1, 'Poor'), (2, 'Below Average'), (3, 'Average'), (4, 'Good'), (5, 'Excellent')]
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='reviews')
     reviewer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
@@ -187,6 +223,10 @@ class PerformanceReview(models.Model):
 
 
 class EmployeeDocument(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     DOC_TYPE_CHOICES = [
         ('offer_letter', 'Offer Letter'), ('id_proof', 'ID Proof'),
         ('contract', 'Contract'), ('certificate', 'Certificate'), ('other', 'Other'),
@@ -206,6 +246,10 @@ class EmployeeDocument(models.Model):
 
 
 class OnboardingChecklist(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='onboarding')
     task = models.CharField(max_length=200)
     completed = models.BooleanField(default=False)
@@ -221,6 +265,10 @@ class OnboardingChecklist(models.Model):
 
 
 class ExitManagement(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     REASON_CHOICES = [
         ('resignation', 'Resignation'), ('termination', 'Termination'),
         ('retirement', 'Retirement'), ('contract_end', 'Contract End'),

@@ -11,6 +11,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
+from apps.companies.mixins import CompanyScopedMixin
 from .models import Incident, Inspection, RiskRegister, SafetyChecklist, ChecklistItem, ComplianceRecord
 from .serializers import (
     IncidentSerializer, InspectionSerializer, RiskRegisterSerializer,
@@ -18,7 +19,7 @@ from .serializers import (
 )
 
 
-class IncidentViewSet(viewsets.ModelViewSet):
+class IncidentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Incident.objects.select_related('reported_by').all()
     serializer_class = IncidentSerializer
     authentication_classes = [JWTAuthentication]
@@ -29,7 +30,8 @@ class IncidentViewSet(viewsets.ModelViewSet):
     ordering_fields = ['date', 'created_at']
 
     def perform_create(self, serializer):
-        serializer.save(reported_by=self.request.user)
+        company, _ = self._company_context()
+        serializer.save(reported_by=self.request.user, company=company)
 
     @action(detail=False, methods=['get'], url_path='export-csv')
     def export_csv(self, request):
@@ -43,7 +45,7 @@ class IncidentViewSet(viewsets.ModelViewSet):
         return response
 
 
-class InspectionViewSet(viewsets.ModelViewSet):
+class InspectionViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Inspection.objects.select_related('conducted_by').all()
     serializer_class = InspectionSerializer
     authentication_classes = [JWTAuthentication]
@@ -54,7 +56,7 @@ class InspectionViewSet(viewsets.ModelViewSet):
     ordering_fields = ['scheduled_date', 'completed_date']
 
 
-class RiskRegisterViewSet(viewsets.ModelViewSet):
+class RiskRegisterViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = RiskRegister.objects.select_related('owner').all()
     serializer_class = RiskRegisterSerializer
     authentication_classes = [JWTAuthentication]
@@ -65,7 +67,7 @@ class RiskRegisterViewSet(viewsets.ModelViewSet):
     ordering_fields = ['risk_score', 'review_date']
 
 
-class SafetyChecklistViewSet(viewsets.ModelViewSet):
+class SafetyChecklistViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = SafetyChecklist.objects.select_related('created_by').prefetch_related('items').all()
     serializer_class = SafetyChecklistSerializer
     authentication_classes = [JWTAuthentication]
@@ -76,10 +78,11 @@ class SafetyChecklistViewSet(viewsets.ModelViewSet):
     ordering_fields = ['date']
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        company, _ = self._company_context()
+        serializer.save(created_by=self.request.user, company=company)
 
 
-class ChecklistItemViewSet(viewsets.ModelViewSet):
+class ChecklistItemViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = ChecklistItem.objects.select_related('checklist').all()
     serializer_class = ChecklistItemSerializer
     authentication_classes = [JWTAuthentication]
@@ -88,7 +91,7 @@ class ChecklistItemViewSet(viewsets.ModelViewSet):
     filterset_fields = ['checklist']
 
 
-class ComplianceRecordViewSet(viewsets.ModelViewSet):
+class ComplianceRecordViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = ComplianceRecord.objects.select_related('responsible_person').all()
     serializer_class = ComplianceRecordSerializer
     authentication_classes = [JWTAuthentication]
@@ -104,21 +107,31 @@ class QHSEDashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from apps.companies.utils import resolve_company, get_company_queryset
+        company, is_platform_admin = resolve_company(request)
+        def scoped(qs):
+            return get_company_queryset(qs, company, is_platform_admin)
+
         today = timezone.now().date()
         month_start = today.replace(day=1)
         ninety_days_ago = today - timezone.timedelta(days=90)
 
-        open_incidents = Incident.objects.exclude(status__in=['closed', 'resolved']).count()
-        incidents_this_month = Incident.objects.filter(date__gte=month_start, date__lte=today).count()
-        high_critical_risks = RiskRegister.objects.filter(risk_level__in=['high', 'critical']).exclude(status__in=['closed', 'mitigated']).count()
-        scheduled_inspections = Inspection.objects.filter(status='scheduled').count()
-        overdue_compliance = ComplianceRecord.objects.filter(due_date__lt=today).exclude(status='compliant').count()
+        incidents_qs = scoped(Incident.objects.all())
+        risks_qs = scoped(RiskRegister.objects.all())
+        inspections_qs = scoped(Inspection.objects.all())
+        compliance_qs = scoped(ComplianceRecord.objects.all())
 
-        recent_scores = Inspection.objects.filter(
+        open_incidents = incidents_qs.exclude(status__in=['closed', 'resolved']).count()
+        incidents_this_month = incidents_qs.filter(date__gte=month_start, date__lte=today).count()
+        high_critical_risks = risks_qs.filter(risk_level__in=['high', 'critical']).exclude(status__in=['closed', 'mitigated']).count()
+        scheduled_inspections = inspections_qs.filter(status='scheduled').count()
+        overdue_compliance = compliance_qs.filter(due_date__lt=today).exclude(status='compliant').count()
+
+        recent_scores = inspections_qs.filter(
             status='completed', score__isnull=False, completed_date__gte=ninety_days_ago,
         ).aggregate(avg=Avg('score'))['avg']
         if recent_scores is None:
-            recent_scores = Inspection.objects.filter(status='completed', score__isnull=False).aggregate(avg=Avg('score'))['avg']
+            recent_scores = inspections_qs.filter(status='completed', score__isnull=False).aggregate(avg=Avg('score'))['avg']
         safety_score = round(recent_scores) if recent_scores is not None else 100
 
         return Response({
@@ -128,6 +141,6 @@ class QHSEDashboardView(APIView):
             'scheduled_inspections': scheduled_inspections,
             'overdue_compliance': overdue_compliance,
             'safety_score': safety_score,
-            'recent_incidents': IncidentSerializer(Incident.objects.select_related('reported_by').order_by('-date', '-id')[:5], many=True).data,
-            'upcoming_inspections': InspectionSerializer(Inspection.objects.filter(status='scheduled').order_by('scheduled_date')[:5], many=True).data,
+            'recent_incidents': IncidentSerializer(incidents_qs.select_related('reported_by').order_by('-date', '-id')[:5], many=True).data,
+            'upcoming_inspections': InspectionSerializer(inspections_qs.filter(status='scheduled').order_by('scheduled_date')[:5], many=True).data,
         })

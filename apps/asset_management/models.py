@@ -14,6 +14,10 @@ def next_number(model, field, prefix):
 
 
 class Asset(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     CATEGORY = [
         ('machinery', 'Machinery'),
         ('vehicle', 'Vehicle'),
@@ -57,6 +61,10 @@ class Asset(models.Model):
 
 
 class MaintenanceRecord(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     TYPE = [
         ('preventive', 'Preventive'),
         ('corrective', 'Corrective'),
@@ -83,6 +91,10 @@ class MaintenanceRecord(models.Model):
 
 
 class AssetDepreciation(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name='depreciation_entries')
     year = models.IntegerField()
     opening_value = models.DecimalField(max_digits=14, decimal_places=2)

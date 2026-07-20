@@ -9,6 +9,10 @@ GST_RATE = Decimal('0.18')
 
 
 class Quotation(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('draft', 'Draft'),
         ('sent', 'Sent'),
@@ -47,6 +51,10 @@ class Quotation(models.Model):
 
 
 class QuotationItem(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     quotation = models.ForeignKey(Quotation, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey('inventory.Product', null=True, blank=True, on_delete=models.SET_NULL, related_name='quotation_items')
     description = models.CharField(max_length=255, blank=True, help_text='Free-text line description; defaults to the product name')
@@ -65,6 +73,10 @@ class QuotationItem(models.Model):
 
 
 class SalesOrder(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('open', 'Open'),
         ('confirmed', 'Confirmed'),
@@ -112,6 +124,10 @@ class SalesOrder(models.Model):
 
 
 class SalesOrderItem(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     order = models.ForeignKey(SalesOrder, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey('inventory.Product', null=True, blank=True, on_delete=models.SET_NULL, related_name='sales_order_items')
     description = models.CharField(max_length=255, blank=True, help_text='Free-text line description; defaults to the product name')

@@ -11,11 +11,12 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 
+from apps.companies.mixins import CompanyScopedMixin
 from .models import Project, Milestone, Task, BudgetEntry
 from .serializers import ProjectSerializer, MilestoneSerializer, TaskSerializer, BudgetEntrySerializer
 
 
-class ProjectViewSet(viewsets.ModelViewSet):
+class ProjectViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Project.objects.select_related('manager').prefetch_related('team_members').all()
     serializer_class = ProjectSerializer
     authentication_classes = [JWTAuthentication]
@@ -31,7 +32,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if request.method == 'POST':
             ser = MilestoneSerializer(data=request.data)
             ser.is_valid(raise_exception=True)
-            ser.save(project=project)
+            ser.save(project=project, company=project.company)
             return Response(ser.data, status=status.HTTP_201_CREATED)
         qs = project.milestones.all()
         return Response(MilestoneSerializer(qs, many=True).data)
@@ -42,7 +43,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if request.method == 'POST':
             ser = TaskSerializer(data=request.data)
             ser.is_valid(raise_exception=True)
-            ser.save(project=project)
+            ser.save(project=project, company=project.company)
             return Response(ser.data, status=status.HTTP_201_CREATED)
         qs = project.tasks.select_related('assigned_to', 'milestone').all()
         return Response(TaskSerializer(qs, many=True).data)
@@ -53,7 +54,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if request.method == 'POST':
             ser = BudgetEntrySerializer(data=request.data)
             ser.is_valid(raise_exception=True)
-            ser.save(project=project)
+            ser.save(project=project, company=project.company)
             return Response(ser.data, status=status.HTTP_201_CREATED)
         qs = project.budget_entries.all()
         return Response(BudgetEntrySerializer(qs, many=True).data)
@@ -72,11 +73,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='dashboard')
     def dashboard(self, request):
         today = timezone.now().date()
-        qs = Project.objects.all()
+        qs = self.get_queryset()
         total_budget = qs.aggregate(t=Sum('budget'))['t'] or Decimal('0')
         total_actual_cost = qs.aggregate(t=Sum('actual_cost'))['t'] or Decimal('0')
-        overdue_milestones = Milestone.objects.filter(due_date__lt=today).exclude(status='completed').count()
-        tasks_due_today = Task.objects.filter(due_date=today).exclude(status='done').count()
+        overdue_milestones = self.company_scope(Milestone.objects.all()).filter(due_date__lt=today).exclude(status='completed').count()
+        tasks_due_today = self.company_scope(Task.objects.all()).filter(due_date=today).exclude(status='done').count()
         return Response({
             'total_projects': qs.count(),
             'active_projects': qs.filter(status='active').count(),
@@ -89,7 +90,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         })
 
 
-class MilestoneViewSet(viewsets.ModelViewSet):
+class MilestoneViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Milestone.objects.select_related('project').all()
     serializer_class = MilestoneSerializer
     authentication_classes = [JWTAuthentication]
@@ -98,7 +99,7 @@ class MilestoneViewSet(viewsets.ModelViewSet):
     filterset_fields = ['project', 'status']
 
 
-class TaskViewSet(viewsets.ModelViewSet):
+class TaskViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Task.objects.select_related('project', 'milestone', 'assigned_to').all()
     serializer_class = TaskSerializer
     authentication_classes = [JWTAuthentication]
@@ -107,7 +108,7 @@ class TaskViewSet(viewsets.ModelViewSet):
     filterset_fields = ['project', 'milestone', 'status', 'assigned_to']
 
 
-class BudgetEntryViewSet(viewsets.ModelViewSet):
+class BudgetEntryViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = BudgetEntry.objects.select_related('project').all()
     serializer_class = BudgetEntrySerializer
     authentication_classes = [JWTAuthentication]

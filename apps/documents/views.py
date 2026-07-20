@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from apps.companies.mixins import CompanyScopedMixin
 from .models import Document, DocumentVersion, DocumentComment, DocumentAuditTrail
 from .serializers import (
     DocumentSerializer, DocumentListSerializer, DocumentVersionSerializer,
@@ -37,7 +38,7 @@ def _send_safe(subject, message, recipient_list):
         logger.warning('Document email failed: %s', exc)
 
 
-class DocumentViewSet(viewsets.ModelViewSet):
+class DocumentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Document.objects.filter(is_deleted=False)
     serializer_class = DocumentSerializer
     authentication_classes = [JWTAuthentication]
@@ -68,7 +69,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         status_param = self.request.query_params.get('status')
         if status_param:
             qs = qs.filter(status=status_param)
-        return qs
+        return self.company_scope(qs)
 
     def _log(self, document, action_name, notes=''):
         user = self.request.user if self.request.user.is_authenticated else None
@@ -77,7 +78,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
     # ── create / retrieve / update / delete ──────────────────────────────────
 
     def perform_create(self, serializer):
-        document = serializer.save(uploaded_by=self.request.user)
+        company, _ = self._company_context()
+        document = serializer.save(uploaded_by=self.request.user, company=company)
         self._log(document, 'uploaded')
 
     def retrieve(self, request, *args, **kwargs):
@@ -167,7 +169,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         document = self.get_object()
         serializer = DocumentVersionSerializer(data=request.data, context=self.get_serializer_context())
         serializer.is_valid(raise_exception=True)
-        version = serializer.save(document=document, uploaded_by=request.user)
+        version = serializer.save(document=document, uploaded_by=request.user, company=document.company)
 
         # Keep the parent Document's own file/version fields pointing at the latest
         # upload so every other view (list, cards, detail) reflects it without a join.
@@ -199,7 +201,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         if request.method == 'POST':
             serializer = DocumentCommentSerializer(data=request.data, context=self.get_serializer_context())
             serializer.is_valid(raise_exception=True)
-            comment = serializer.save(document=document, user=request.user)
+            comment = serializer.save(document=document, user=request.user, company=document.company)
             self._log(document, 'commented', notes=comment.comment[:200])
             return Response(DocumentCommentSerializer(comment, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED)
         qs = document.comments.select_related('user').all()

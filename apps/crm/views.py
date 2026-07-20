@@ -27,6 +27,9 @@ from .serializers import (
 
 class CustomerViewSet(RBACScopedMixin, ProtectedDestroyMixin, viewsets.ModelViewSet):
     rbac_module = 'crm'
+    # Customer.company is a pre-existing free-text business field (the customer's own
+    # company name) — the tenant FK is named `tenant` on this model to avoid the clash.
+    company_field = 'tenant'
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
     authentication_classes = [JWTAuthentication]
@@ -160,6 +163,7 @@ class ContactViewSet(RBACScopedMixin, viewsets.ModelViewSet):
 
 class LeadViewSet(RBACScopedMixin, viewsets.ModelViewSet):
     rbac_module = 'crm'
+    company_field = 'tenant'   # see CustomerViewSet — Lead.company is also free-text
     queryset = Lead.objects.select_related('assigned_to', 'customer').all()
     serializer_class = LeadSerializer
     authentication_classes = [JWTAuthentication]
@@ -321,8 +325,10 @@ class PipelineView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from apps.companies.utils import resolve_company, get_company_queryset
+        company, is_platform_admin = resolve_company(request)
         deals = filter_queryset_by_role(
-            Deal.objects.select_related('customer', 'lead', 'assigned_to').all(),
+            get_company_queryset(Deal.objects.select_related('customer', 'lead', 'assigned_to').all(), company, is_platform_admin),
             request.user, 'crm',
         )
         grouped: dict = {key: [] for key, _ in Deal.STAGE_CHOICES}
@@ -346,19 +352,26 @@ class CRMDashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from apps.companies.utils import resolve_company, get_company_queryset
+        company, is_platform_admin = resolve_company(request)
+
+        customers_qs = get_company_queryset(Customer.objects.all(), company, is_platform_admin, company_field='tenant')
+        leads_qs = get_company_queryset(Lead.objects.all(), company, is_platform_admin, company_field='tenant')
+        deals_qs = get_company_queryset(Deal.objects.all(), company, is_platform_admin)
+
         today = timezone.now().date()
         month_start = today.replace(day=1)
 
-        total_customers = Customer.objects.count()
-        total_leads = Lead.objects.count()
-        total_deals_value = float(Deal.objects.exclude(stage='lost').aggregate(t=Sum('value'))['t'] or 0)
+        total_customers = customers_qs.count()
+        total_leads = leads_qs.count()
+        total_deals_value = float(deals_qs.exclude(stage='lost').aggregate(t=Sum('value'))['t'] or 0)
 
-        won = Lead.objects.filter(status='won').count()
-        decided = Lead.objects.filter(status__in=['won', 'lost']).count()
+        won = leads_qs.filter(status='won').count()
+        decided = leads_qs.filter(status__in=['won', 'lost']).count()
         leads_conversion_rate = round((won / decided) * 100, 1) if decided else 0.0
 
         top_5 = list(
-            Deal.objects.exclude(customer__isnull=True).values('customer_id', 'customer__name')
+            deals_qs.exclude(customer__isnull=True).values('customer_id', 'customer__name')
             .annotate(total=Sum('value')).order_by('-total')[:5]
         )
         top_5_customers_by_deal_value = [
@@ -382,16 +395,17 @@ class CRMDashboardView(APIView):
             else:
                 ny, nm = (ms.year + 1, 1) if ms.month == 12 else (ms.year, ms.month + 1)
                 me = ms.replace(year=ny, month=nm)
-            agg = Deal.objects.filter(created_at__date__gte=ms, created_at__date__lt=me).aggregate(count=Count('id'), value=Sum('value'))
+            agg = deals_qs.filter(created_at__date__gte=ms, created_at__date__lt=me).aggregate(count=Count('id'), value=Sum('value'))
             monthly_deals_last_6_months.append({'month': ms.strftime('%b %Y'), 'count': agg['count'] or 0, 'value': float(agg['value'] or 0)})
 
         pipeline_value_by_stage = [
             {'stage': row['stage'], 'value': float(row['total'] or 0)}
-            for row in Deal.objects.values('stage').annotate(total=Sum('value')).order_by('stage')
+            for row in deals_qs.values('stage').annotate(total=Sum('value')).order_by('stage')
         ]
 
-        activities_due_today = Activity.objects.filter(due_date=today).count()
-        overdue_activities = Activity.objects.filter(due_date__lt=today, completed=False).count()
+        activities_qs = get_company_queryset(Activity.objects.all(), company, is_platform_admin)
+        activities_due_today = activities_qs.filter(due_date=today).count()
+        overdue_activities = activities_qs.filter(due_date__lt=today, completed=False).count()
 
         return Response({
             'total_customers': total_customers,

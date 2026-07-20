@@ -13,7 +13,8 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from rest_framework.parsers import MultiPartParser, FormParser
 
-from apps.rbac.utils import filter_queryset_by_role
+from apps.rbac.mixins import RBACScopedMixin
+from apps.companies.mixins import CompanyScopedMixin
 from .models import (Attendance, Department, Employee, LeaveRequest, PaySlip,
                      Payroll, SalaryStructure, Shift,
                      PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement)
@@ -34,7 +35,7 @@ DEFAULT_ONBOARDING_TASKS = [
 ]
 
 
-class DepartmentViewSet(viewsets.ModelViewSet):
+class DepartmentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Department.objects.all()
     serializer_class = DepartmentSerializer
     authentication_classes = [JWTAuthentication]
@@ -43,7 +44,8 @@ class DepartmentViewSet(viewsets.ModelViewSet):
     search_fields = ['name', 'code']
 
 
-class EmployeeViewSet(viewsets.ModelViewSet):
+class EmployeeViewSet(RBACScopedMixin, viewsets.ModelViewSet):
+    rbac_module = 'hr'
     queryset = Employee.objects.select_related('department', 'user').all()
     serializer_class = EmployeeSerializer
     authentication_classes = [JWTAuthentication]
@@ -51,13 +53,6 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter, DjangoFilterBackend]
     search_fields = ['full_name', 'email', 'code']
     filterset_fields = ['department', 'status']
-
-    def get_queryset(self):
-        qs = super().get_queryset()
-        return filter_queryset_by_role(qs, self.request.user, 'hr')
-
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
 
     @action(detail=False, methods=['get'], url_path='linkable-users')
     def linkable_users(self, request):
@@ -74,7 +69,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         if request.method == 'POST':
             ser = EmployeeDocumentSerializer(data=request.data, context={'request': request})
             ser.is_valid(raise_exception=True)
-            ser.save(employee=employee)
+            ser.save(employee=employee, company=employee.company)
             return Response(ser.data, status=status.HTTP_201_CREATED)
         qs = employee.documents.all()
         return Response(EmployeeDocumentSerializer(qs, many=True, context={'request': request}).data)
@@ -86,14 +81,14 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             # Seed the default 6-item checklist if none exists yet.
             if not employee.onboarding.exists():
                 OnboardingChecklist.objects.bulk_create([
-                    OnboardingChecklist(employee=employee, task=t, order=i)
+                    OnboardingChecklist(employee=employee, task=t, order=i, company=employee.company)
                     for i, t in enumerate(DEFAULT_ONBOARDING_TASKS)
                 ])
         qs = employee.onboarding.all()
         return Response(OnboardingChecklistSerializer(qs, many=True).data)
 
 
-class AttendanceViewSet(viewsets.ModelViewSet):
+class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Attendance.objects.select_related('employee').all()
     serializer_class = AttendanceSerializer
     authentication_classes = [JWTAuthentication]
@@ -117,7 +112,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         today = date.today()
         att, created = Attendance.objects.get_or_create(
             employee=employee, date=today,
-            defaults={'check_in': timezone.now(), 'status': 'present'},
+            defaults={'check_in': timezone.now(), 'status': 'present', 'company': employee.company},
         )
         if not created:
             if att.check_in:
@@ -229,13 +224,17 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         return Response(list(buckets.values()))
 
 
-class LeaveRequestViewSet(viewsets.ModelViewSet):
+class LeaveRequestViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = LeaveRequest.objects.select_related('employee', 'decided_by').all()
     serializer_class = LeaveRequestSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee', 'status', 'type']
+
+    def perform_create(self, serializer):
+        employee = serializer.validated_data.get('employee')
+        serializer.save(company=employee.company if employee else None)
 
     @action(detail=True, methods=['patch'], url_path='approve')
     def approve(self, request, pk=None):
@@ -261,14 +260,14 @@ class LeaveRequestViewSet(viewsets.ModelViewSet):
         return Response(LeaveRequestSerializer(qs, many=True).data)
 
 
-class ShiftViewSet(viewsets.ModelViewSet):
+class ShiftViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Shift.objects.prefetch_related('employees').all()
     serializer_class = ShiftSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
 
-class SalaryStructureViewSet(viewsets.ModelViewSet):
+class SalaryStructureViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = SalaryStructure.objects.select_related('employee').all()
     serializer_class = SalaryStructureSerializer
     authentication_classes = [JWTAuthentication]
@@ -276,8 +275,12 @@ class SalaryStructureViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee']
 
+    def perform_create(self, serializer):
+        employee = serializer.validated_data.get('employee')
+        serializer.save(company=employee.company if employee else None)
 
-class PayrollViewSet(viewsets.ModelViewSet):
+
+class PayrollViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Payroll.objects.select_related('employee', 'generated_by').all()
     serializer_class = PayrollSerializer
     authentication_classes = [JWTAuthentication]
@@ -350,7 +353,7 @@ class PayrollViewSet(viewsets.ModelViewSet):
                     setattr(payroll, field, value)
                 to_update.append(payroll)
             else:
-                to_create.append(Payroll(employee=emp, month=month, year=year, **fields))
+                to_create.append(Payroll(employee=emp, month=month, year=year, company=emp.company, **fields))
 
         with transaction.atomic():
             if to_create:
@@ -364,7 +367,7 @@ class PayrollViewSet(viewsets.ModelViewSet):
                 .values_list('pk', flat=True)
             )
             PaySlip.objects.bulk_create([
-                PaySlip(payroll=p) for p in all_payrolls if p.pk in payrolls_without_payslip
+                PaySlip(payroll=p, company=p.company) for p in all_payrolls if p.pk in payrolls_without_payslip
             ], batch_size=500)
 
         created_payrolls = [PayrollSerializer(p).data for p in all_payrolls]
@@ -402,7 +405,7 @@ class PayrollViewSet(viewsets.ModelViewSet):
     def payslip(self, request, pk=None):
         """GET /hr/payroll/{id}/payslip/ — full payslip detail for the modal/download."""
         payroll = self.get_object()
-        PaySlip.objects.get_or_create(payroll=payroll)
+        PaySlip.objects.get_or_create(payroll=payroll, defaults={'company': payroll.company})
         return Response(PayrollSerializer(payroll).data)
 
     @action(detail=False, methods=['get'], url_path='report')
@@ -417,7 +420,7 @@ class PayrollViewSet(viewsets.ModelViewSet):
         return Response(PayrollSerializer(qs, many=True).data)
 
 
-class PaySlipViewSet(viewsets.ReadOnlyModelViewSet):
+class PaySlipViewSet(CompanyScopedMixin, viewsets.ReadOnlyModelViewSet):
     queryset = PaySlip.objects.select_related('payroll__employee').all()
     serializer_class = PaySlipSerializer
     authentication_classes = [JWTAuthentication]
@@ -426,7 +429,7 @@ class PaySlipViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_fields = ['payroll__employee', 'payroll__month', 'payroll__year']
 
 
-class PerformanceReviewViewSet(viewsets.ModelViewSet):
+class PerformanceReviewViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = PerformanceReview.objects.select_related('employee', 'reviewer').all()
     serializer_class = PerformanceReviewSerializer
     authentication_classes = [JWTAuthentication]
@@ -435,10 +438,11 @@ class PerformanceReviewViewSet(viewsets.ModelViewSet):
     filterset_fields = ['employee', 'rating']
 
     def perform_create(self, serializer):
-        serializer.save(reviewer=self.request.user)
+        employee = serializer.validated_data.get('employee')
+        serializer.save(reviewer=self.request.user, company=employee.company if employee else None)
 
 
-class EmployeeDocumentViewSet(viewsets.ModelViewSet):
+class EmployeeDocumentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = EmployeeDocument.objects.select_related('employee').all()
     serializer_class = EmployeeDocumentSerializer
     authentication_classes = [JWTAuthentication]
@@ -448,7 +452,7 @@ class EmployeeDocumentViewSet(viewsets.ModelViewSet):
     filterset_fields = ['employee', 'doc_type']
 
 
-class OnboardingChecklistViewSet(viewsets.ModelViewSet):
+class OnboardingChecklistViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = OnboardingChecklist.objects.select_related('employee').all()
     serializer_class = OnboardingChecklistSerializer
     authentication_classes = [JWTAuthentication]
@@ -465,13 +469,17 @@ class OnboardingChecklistViewSet(viewsets.ModelViewSet):
         return Response(OnboardingChecklistSerializer(item).data)
 
 
-class ExitManagementViewSet(viewsets.ModelViewSet):
+class ExitManagementViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = ExitManagement.objects.select_related('employee').all()
     serializer_class = ExitManagementSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee', 'reason', 'settlement_paid']
+
+    def perform_create(self, serializer):
+        employee = serializer.validated_data.get('employee')
+        serializer.save(company=employee.company if employee else None)
 
     @action(detail=True, methods=['patch'], url_path='mark-interview-done')
     def mark_interview_done(self, request, pk=None):

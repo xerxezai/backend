@@ -16,6 +16,10 @@ def next_number(model, field, prefix):
 
 
 class Shipment(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('pending', 'Pending'),
         ('dispatched', 'Dispatched'),
@@ -55,6 +59,10 @@ class Shipment(models.Model):
 
 
 class TrackingUpdate(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE, related_name='tracking_updates')
     status = models.CharField(max_length=100)
     location = models.CharField(max_length=255, blank=True)
@@ -70,6 +78,10 @@ class TrackingUpdate(models.Model):
 
 
 class Delivery(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('delivered', 'Delivered'),
         ('failed', 'Failed'),
@@ -97,6 +109,10 @@ class Delivery(models.Model):
 class Warehouse(models.Model):
     """A logistics facility record — distinct from apps.inventory.Warehouse (stock-movement
     locations). Django gives each its own db_table automatically, so no collision."""
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     name = models.CharField(max_length=120)
     location = models.CharField(max_length=255, blank=True)
     capacity = models.DecimalField(max_digits=12, decimal_places=2, default=0)

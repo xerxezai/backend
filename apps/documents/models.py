@@ -3,6 +3,10 @@ from django.db import models
 
 
 class Document(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     CATEGORY_CHOICES = [
         ('engineering_drawing', 'Engineering Drawing'),
         ('contract',            'Contract'),
@@ -46,6 +50,10 @@ class Document(models.Model):
 
 
 class DocumentVersion(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     document       = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='versions')
     version_number = models.CharField(max_length=20)
     file           = models.FileField(upload_to='document_versions/')
@@ -61,6 +69,10 @@ class DocumentVersion(models.Model):
 
 
 class DocumentComment(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     document   = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='comments')
     user       = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='document_comments')
     comment    = models.TextField()
@@ -74,6 +86,10 @@ class DocumentComment(models.Model):
 
 
 class DocumentAuditTrail(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     ACTION_CHOICES = [
         ('uploaded',    'Uploaded'),
         ('viewed',      'Viewed'),

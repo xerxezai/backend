@@ -14,6 +14,10 @@ def next_number(model, field, prefix):
 
 
 class Project(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('planning', 'Planning'),
         ('active', 'Active'),
@@ -51,6 +55,10 @@ class Project(models.Model):
 
 
 class Milestone(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('pending', 'Pending'),
         ('in_progress', 'In Progress'),
@@ -73,6 +81,10 @@ class Milestone(models.Model):
 
 
 class Task(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     STATUS = [
         ('todo', 'To Do'),
         ('in_progress', 'In Progress'),
@@ -105,6 +117,10 @@ class Task(models.Model):
 
 
 class BudgetEntry(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
     CATEGORY = [
         ('labour', 'Labour'),
         ('materials', 'Materials'),
