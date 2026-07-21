@@ -7,8 +7,8 @@ class PartnerApplicationCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = PartnerApplication
         fields = [
-            'full_name', 'email', 'phone', 'linkedin_url', 'country', 'city', 'languages',
-            'current_profession', 'years_experience', 'industries', 'estimated_deals',
+            'full_name', 'email', 'phone', 'linkedin_url', 'country', 'city', 'target_market', 'languages',
+            'current_profession', 'years_experience', 'modules', 'estimated_deals',
             'network_description', 'agreed_to_nda',
         ]
 
@@ -27,9 +27,9 @@ class PartnerApplicationCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Select at least one language.')
         return value
 
-    def validate_industries(self, value):
+    def validate_modules(self, value):
         if not value:
-            raise serializers.ValidationError('Select at least one industry.')
+            raise serializers.ValidationError('Select at least one module.')
         return value
 
 
@@ -39,8 +39,8 @@ class PartnerApplicationSerializer(serializers.ModelSerializer):
     class Meta:
         model = PartnerApplication
         fields = [
-            'id', 'full_name', 'email', 'phone', 'linkedin_url', 'country', 'city', 'languages',
-            'current_profession', 'years_experience', 'industries', 'estimated_deals',
+            'id', 'full_name', 'email', 'phone', 'linkedin_url', 'country', 'city', 'target_market', 'languages',
+            'current_profession', 'years_experience', 'modules', 'estimated_deals',
             'network_description', 'agreed_to_nda', 'status', 'reviewed_by', 'reviewed_by_name',
             'reviewed_at', 'notes', 'created_at',
         ]

@@ -21,27 +21,32 @@ FROM_EMAIL = 'onboarding@resend.dev'
 
 
 def _notification_email(app: PartnerApplication) -> tuple:
-    plain = f"""
-New Partner Application — XERXEZ Website
-=========================================
-Name          : {app.full_name}
-Email         : {app.email}
-Phone         : {app.phone}
-LinkedIn      : {app.linkedin_url or '—'}
-Location      : {app.city}, {app.country}
-Languages     : {', '.join(app.languages)}
+    modules_list = '\n'.join(f'- {m}' for m in app.modules) if app.modules else '- (none selected)'
+    plain = f"""New partner application received.
 
-Profession    : {app.current_profession}
-Experience    : {app.years_experience}
-Industries    : {', '.join(app.industries)}
-Deals/Month   : {app.estimated_deals}
+Name: {app.full_name}
+Email: {app.email}
+Phone: {app.phone}
+Country: {app.country}
+City: {app.city}
+Target Market: {app.target_market or '—'}
+LinkedIn: {app.linkedin_url or '—'}
 
-Network
--------
+Experience:
+- Profession: {app.current_profession}
+- Years of Experience: {app.years_experience}
+- Estimated Deals/Month: {app.estimated_deals}
+
+Modules They Can Sell:
+{modules_list}
+
+Network Description:
 {app.network_description}
 
-=========================================
-Reply directly to {app.email} to respond.
+Applied on: {app.created_at.strftime('%Y-%m-%d %H:%M')}
+
+Review this application at:
+xerxez.com/erp/partners
 """.strip()
 
     html = f"""<!DOCTYPE html>
@@ -77,10 +82,11 @@ Reply directly to {app.email} to respond.
       <tr><td>Phone</td>      <td>{app.phone}</td></tr>
       <tr><td>LinkedIn</td>   <td>{app.linkedin_url or '—'}</td></tr>
       <tr><td>Location</td>   <td>{app.city}, {app.country}</td></tr>
+      <tr><td>Target Market</td><td>{app.target_market or '—'}</td></tr>
       <tr><td>Languages</td>  <td>{', '.join(app.languages)}</td></tr>
       <tr><td>Profession</td> <td>{app.current_profession}</td></tr>
       <tr><td>Experience</td> <td>{app.years_experience}</td></tr>
-      <tr><td>Industries</td> <td>{', '.join(app.industries)}</td></tr>
+      <tr><td>Modules</td>    <td>{', '.join(app.modules)}</td></tr>
       <tr><td>Deals/Month</td><td>{app.estimated_deals}</td></tr>
     </table>
     <div class="msg">{app.network_description}</div>
@@ -158,7 +164,7 @@ class PartnerApplyView(APIView):
             )
 
         plain, html = _notification_email(app)
-        send_via_resend(to=ADMIN_EMAIL, subject=f'New Partner Application — {app.full_name}', html=html, text=plain, from_email=FROM_EMAIL, reply_to=app.email)
+        send_via_resend(to=ADMIN_EMAIL, subject=f'New Partner Application — {app.full_name} from {app.country}', html=html, text=plain, from_email=FROM_EMAIL, reply_to=app.email)
 
         plain2, html2 = _applicant_confirmation_email(app)
         send_via_resend(to=app.email, subject='XERXEZ Partner Application Received', html=html2, text=plain2, from_email=FROM_EMAIL)

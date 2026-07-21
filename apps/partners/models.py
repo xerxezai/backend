@@ -19,11 +19,12 @@ class PartnerApplication(models.Model):
 
     country = models.CharField(max_length=100)
     city = models.CharField(max_length=100)
+    target_market = models.CharField(max_length=255, blank=True, default='', help_text='Market/country they intend to sell in, e.g. "Saudi Arabia, Egypt"')
     languages = models.JSONField(default=list, help_text='List of languages spoken, e.g. ["English","Arabic"]')
 
     current_profession = models.CharField(max_length=200)
     years_experience = models.CharField(max_length=20)
-    industries = models.JSONField(default=list, help_text='List of industries with connections, e.g. ["Oil & Gas"]')
+    modules = models.JSONField(default=list, blank=True, help_text='List of XERXEZ modules they can sell, e.g. ["CRM (Customer Management)","Full ERP Suite (All Modules)"]')
     estimated_deals = models.CharField(max_length=20)
     network_description = models.TextField()
     agreed_to_nda = models.BooleanField(default=False)
