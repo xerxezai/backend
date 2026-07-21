@@ -1,6 +1,4 @@
 import logging
-import secrets
-import string
 from decimal import Decimal
 
 from django.contrib.auth import authenticate, get_user_model
@@ -35,11 +33,6 @@ class IsApprovedPartner(IsAuthenticated):
             return False
         partner = getattr(request.user, 'partner', None)
         return partner is not None and partner.status == 'approved'
-
-
-def _generate_password(length: int = 8) -> str:
-    alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
 # ── emails ──────────────────────────────────────────────────────────────────
@@ -444,7 +437,12 @@ class AdminPartnerApproveView(APIView):
         if User.objects.filter(username=partner.email).exists():
             return Response({'error': f'A user account already exists for {partner.email}. Resolve manually before approving.'}, status=400)
 
-        password = _generate_password()
+        password = request.data.get('password')
+        if not password:
+            return Response({'error': 'Password is required.'}, status=400)
+        if len(password) < 8:
+            return Response({'error': 'Password must be at least 8 characters.'}, status=400)
+
         user = User.objects.create_user(
             username=partner.email, email=partner.email,
             first_name=partner.full_name.split()[0] if partner.full_name else '',
