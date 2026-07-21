@@ -1,11 +1,14 @@
 from rest_framework import serializers
 
-from .models import PartnerApplication, PartnerLead
+from .models import Partner, PartnerDeal
 
 
-class PartnerApplicationCreateSerializer(serializers.ModelSerializer):
+class PartnerApplySerializer(serializers.ModelSerializer):
+    """Public application form — POST /partners/apply/. Creates a `Partner` row with
+    status='pending'; nothing here is user-editable after submission except by admin."""
+
     class Meta:
-        model = PartnerApplication
+        model = Partner
         fields = [
             'full_name', 'email', 'phone', 'linkedin_url', 'country', 'city', 'target_market', 'languages',
             'current_profession', 'years_experience', 'modules', 'estimated_deals',
@@ -29,37 +32,46 @@ class PartnerApplicationCreateSerializer(serializers.ModelSerializer):
 
     def validate_modules(self, value):
         if not value:
-            raise serializers.ValidationError('Select at least one module.')
+            raise serializers.ValidationError('Select at least one package.')
         return value
 
 
-class PartnerApplicationSerializer(serializers.ModelSerializer):
-    reviewed_by_name = serializers.CharField(source='reviewed_by.get_full_name', read_only=True, default=None)
+class PartnerSerializer(serializers.ModelSerializer):
+    approved_by_name = serializers.CharField(source='approved_by.get_full_name', read_only=True, default=None)
 
     class Meta:
-        model = PartnerApplication
+        model = Partner
         fields = [
-            'id', 'full_name', 'email', 'phone', 'linkedin_url', 'country', 'city', 'target_market', 'languages',
-            'current_profession', 'years_experience', 'modules', 'estimated_deals',
-            'network_description', 'agreed_to_nda', 'status', 'reviewed_by', 'reviewed_by_name',
-            'reviewed_at', 'notes', 'created_at',
+            'id', 'full_name', 'email', 'phone', 'country', 'city', 'target_market', 'linkedin_url', 'languages',
+            'current_profession', 'years_experience', 'modules', 'estimated_deals', 'network_description', 'agreed_to_nda',
+            'commission_tier', 'status', 'partner_code', 'total_deals', 'total_commission_earned', 'total_commission_paid',
+            'notes', 'joined_at', 'approved_by', 'approved_by_name', 'approved_at',
         ]
-        read_only_fields = ['id', 'created_at', 'reviewed_by', 'reviewed_at']
+        read_only_fields = [
+            'id', 'partner_code', 'total_deals', 'total_commission_earned', 'total_commission_paid',
+            'joined_at', 'approved_by', 'approved_at',
+        ]
 
 
-class PartnerLeadSerializer(serializers.ModelSerializer):
-    commission_amount = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+class PartnerDealSerializer(serializers.ModelSerializer):
+    partner_name = serializers.CharField(source='partner.full_name', read_only=True)
+    partner_code = serializers.CharField(source='partner.partner_code', read_only=True)
 
     class Meta:
-        model = PartnerLead
+        model = PartnerDeal
         fields = [
-            'id', 'client_name', 'company', 'country', 'phone', 'email',
-            'package', 'modules_needed', 'notes', 'deal_value', 'commission_amount',
-            'status', 'created_at',
+            'id', 'partner', 'partner_name', 'partner_code', 'deal_number',
+            'client_company', 'client_contact_person', 'client_phone', 'client_email', 'client_country',
+            'package', 'num_employees', 'current_system', 'notes',
+            'status', 'deal_value', 'commission_rate', 'commission_amount', 'commission_status', 'commission_paid_at',
+            'submitted_at', 'updated_at', 'reviewed_by',
         ]
-        read_only_fields = ['id', 'status', 'created_at', 'commission_amount']
+        read_only_fields = [
+            'id', 'partner', 'partner_name', 'partner_code', 'deal_number',
+            'commission_amount', 'submitted_at', 'updated_at', 'reviewed_by',
+        ]
 
-    def validate_client_name(self, value):
+    def validate_client_company(self, value):
         if not value.strip():
-            raise serializers.ValidationError('Client name is required.')
+            raise serializers.ValidationError('Client company name is required.')
         return value
