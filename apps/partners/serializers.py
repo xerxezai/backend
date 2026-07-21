@@ -16,8 +16,8 @@ class PartnerApplySerializer(serializers.ModelSerializer):
         ]
 
     def validate_network_description(self, value):
-        if len(value.strip()) < 100:
-            raise serializers.ValidationError('Please describe your network in at least 100 characters.')
+        if len(value.strip()) < 20:
+            raise serializers.ValidationError('Please describe your network in at least 20 characters.')
         return value
 
     def validate_agreed_to_nda(self, value):
