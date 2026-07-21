@@ -411,6 +411,11 @@ class AdminPartnerDetailView(APIView):
         new_status = request.data.get('status')
         if new_status and new_status not in dict(Partner.STATUS_CHOICES):
             return Response({'error': f'status must be one of: {", ".join(dict(Partner.STATUS_CHOICES))}'}, status=400)
+        # A partner can only reach 'approved' here as a *reactivation* (they already have a
+        # partner_code/user from a prior approval) — first-time approval must go through
+        # AdminPartnerApproveView so the login account + welcome email actually get created.
+        if new_status == 'approved' and not partner.partner_code:
+            return Response({'error': 'Use the Approve action to approve a partner for the first time.'}, status=400)
         if new_status:
             partner.status = new_status
         if 'notes' in request.data:
@@ -419,6 +424,17 @@ class AdminPartnerDetailView(APIView):
             partner.commission_tier = request.data['commission_tier']
         partner.save()
         return Response(PartnerSerializer(partner).data)
+
+    def delete(self, request, pk):
+        try:
+            partner = Partner.objects.get(pk=pk)
+        except Partner.DoesNotExist:
+            return Response({'error': 'Not found'}, status=404)
+        user = partner.user
+        partner.delete()
+        if user:
+            user.delete()
+        return Response(status=204)
 
 
 class AdminPartnerApproveView(APIView):
@@ -532,3 +548,13 @@ class AdminDealDetailView(APIView):
         deal.partner.sync_stats()
 
         return Response(PartnerDealSerializer(deal).data)
+
+    def delete(self, request, pk):
+        try:
+            deal = PartnerDeal.objects.select_related('partner').get(pk=pk)
+        except PartnerDeal.DoesNotExist:
+            return Response({'error': 'Not found'}, status=404)
+        partner = deal.partner
+        deal.delete()
+        partner.sync_stats()
+        return Response(status=204)
