@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import PartnerApplication
+from .models import PartnerApplication, PartnerLead
 
 
 class PartnerApplicationCreateSerializer(serializers.ModelSerializer):
@@ -45,3 +45,21 @@ class PartnerApplicationSerializer(serializers.ModelSerializer):
             'reviewed_at', 'notes', 'created_at',
         ]
         read_only_fields = ['id', 'created_at', 'reviewed_by', 'reviewed_at']
+
+
+class PartnerLeadSerializer(serializers.ModelSerializer):
+    commission_amount = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = PartnerLead
+        fields = [
+            'id', 'client_name', 'company', 'country', 'phone', 'email',
+            'package', 'modules_needed', 'notes', 'deal_value', 'commission_amount',
+            'status', 'created_at',
+        ]
+        read_only_fields = ['id', 'status', 'created_at', 'commission_amount']
+
+    def validate_client_name(self, value):
+        if not value.strip():
+            raise serializers.ValidationError('Client name is required.')
+        return value

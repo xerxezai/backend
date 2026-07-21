@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 
 from django.utils import timezone
 from rest_framework.views import APIView
@@ -9,8 +10,9 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from apps.core.email import send_via_resend
 from apps.rbac.views import IsSuperAdmin
-from .models import PartnerApplication
-from .serializers import PartnerApplicationCreateSerializer, PartnerApplicationSerializer
+from .models import PartnerApplication, PartnerLead
+from .serializers import PartnerApplicationCreateSerializer, PartnerApplicationSerializer, PartnerLeadSerializer
+from .utils import get_partner_from_request
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +147,70 @@ info@xerxez.com | xerxez.com
     return plain, html
 
 
+def _portal_access_email(app: PartnerApplication) -> tuple:
+    first = app.full_name.split()[0] if app.full_name else 'there'
+    plain = f"""Hi {first},
+
+Great news — your XERXEZ Partner application has been approved!
+
+You can now log in to the Partner Portal to submit leads and track your
+commission:
+
+  Portal: https://www.xerxez.com/partner-portal
+  Email:  {app.email}
+  Access code: {app.portal_token}
+
+Keep your access code private — it's how the portal confirms it's you.
+
+Best regards,
+The XERXEZ Team
+info@xerxez.com | xerxez.com
+""".strip()
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8">
+<style>
+  body{{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;padding:0}}
+  .wrap{{max-width:580px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,.10)}}
+  .hdr{{background:linear-gradient(135deg,#1a1208 0%,#0f0a05 100%);padding:36px 40px;text-align:center}}
+  .hdr h1{{color:#C9883A;font-family:Georgia,serif;font-size:22px;margin:0 0 4px;letter-spacing:.04em}}
+  .hdr p{{color:rgba(255,255,255,.55);font-size:13px;margin:0}}
+  .body{{padding:36px 40px;font-size:14px;color:#333;line-height:1.74}}
+  .creds{{background:#fafaf8;border-radius:10px;border:1px solid #f0ede8;border-left:3px solid #C9883A;
+          padding:16px 20px;margin:20px 0;font-size:13px}}
+  .creds p{{margin:4px 0;color:#5a5650}}
+  .creds strong{{color:#1a1a1a}}
+  .cta{{display:inline-block;margin-top:10px;padding:13px 32px;
+        background:linear-gradient(145deg,#e8a84e,#C9883A);color:#fff!important;
+        font-size:13px;font-weight:700;border-radius:100px;text-decoration:none;box-shadow:0 4px 12px rgba(201,136,58,.28)}}
+  .ftr{{background:#1a1a1a;border-top:1px solid #2c2c2c;padding:18px 40px;text-align:center;font-size:12px;color:rgba(255,255,255,.45)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr"><h1>XERXEZ</h1><p>Partner Program</p></div>
+  <div class="body">
+    <p>Hi {first},</p>
+    <p>Great news — your <strong>XERXEZ Partner</strong> application has been approved! You can
+    now log in to the Partner Portal to submit leads and track your commission.</p>
+    <div class="creds">
+      <p><strong>Email:</strong> {app.email}</p>
+      <p><strong>Access code:</strong> {app.portal_token}</p>
+      <p style="color:#9b9690;margin-top:10px">Keep your access code private — it's how the portal confirms it's you.</p>
+    </div>
+    <div style="text-align:center">
+      <a class="cta" href="https://www.xerxez.com/partner-portal">Open Partner Portal</a>
+    </div>
+    <p>Best regards,<br><strong>The XERXEZ Team</strong></p>
+  </div>
+  <div class="ftr">XERXEZ &nbsp;·&nbsp; info@xerxez.com &nbsp;·&nbsp; xerxez.com</div>
+</div>
+</body>
+</html>"""
+    return plain, html
+
+
 class PartnerApplyView(APIView):
     """POST /api/v1/partners/apply/ — public, no auth required."""
     permission_classes = [AllowAny]
@@ -209,6 +275,7 @@ class PartnerApplicationDetailView(APIView):
         new_status = request.data.get('status')
         if new_status and new_status not in dict(PartnerApplication.STATUS_CHOICES):
             return Response({'error': f'status must be one of: {", ".join(dict(PartnerApplication.STATUS_CHOICES))}'}, status=400)
+        was_approved = app.status == 'approved'
         if new_status:
             app.status = new_status
             app.reviewed_by = request.user
@@ -216,4 +283,73 @@ class PartnerApplicationDetailView(APIView):
         if 'notes' in request.data:
             app.notes = request.data.get('notes') or ''
         app.save()
+
+        # First time approved -> mint the Partner Portal access code and email it.
+        # `was_approved` guard keeps a later notes-only edit (or re-saving 'approved')
+        # from re-sending this every time.
+        if new_status == 'approved' and not was_approved:
+            app.ensure_portal_token()
+            plain, html = _portal_access_email(app)
+            send_via_resend(to=app.email, subject='Your XERXEZ Partner Portal access', html=html, text=plain, from_email=FROM_EMAIL)
+
         return Response(PartnerApplicationSerializer(app).data)
+
+
+class PartnerLoginView(APIView):
+    """POST /api/v1/partners/login/ — {email, token} -> partner profile, or 401."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = (request.data.get('email') or '').strip()
+        token = (request.data.get('token') or '').strip()
+        if not email or not token:
+            return Response({'error': 'Email and access code are required.'}, status=400)
+        try:
+            app = PartnerApplication.objects.get(email__iexact=email, portal_token=token, status='approved')
+        except PartnerApplication.DoesNotExist:
+            return Response({'error': 'Invalid email or access code.'}, status=401)
+        return Response({'id': app.id, 'full_name': app.full_name, 'email': app.email})
+
+
+class PartnerMeView(APIView):
+    """GET /api/v1/partners/me/ — the logged-in partner's profile + lead/commission stats."""
+    permission_classes = [AllowAny]  # auth is the X-Partner-* headers, checked below
+
+    def get(self, request):
+        partner = get_partner_from_request(request)
+        if not partner:
+            return Response({'error': 'Not authenticated'}, status=401)
+
+        leads = partner.leads.all()
+        won_leads = leads.filter(status='won')
+        total_commission = sum((l.commission_amount for l in won_leads), Decimal('0'))
+        pending_commission = sum((l.commission_amount for l in leads.exclude(status__in=['won', 'lost'])), Decimal('0'))
+
+        return Response({
+            'id': partner.id, 'full_name': partner.full_name, 'email': partner.email,
+            'total_leads': leads.count(),
+            'won_leads': won_leads.count(),
+            'total_commission': str(total_commission),
+            'pending_commission': str(pending_commission),
+        })
+
+
+class PartnerLeadListCreateView(APIView):
+    """GET/POST /api/v1/partners/leads/ — the logged-in partner's own leads."""
+    permission_classes = [AllowAny]  # auth is the X-Partner-* headers, checked below
+
+    def get(self, request):
+        partner = get_partner_from_request(request)
+        if not partner:
+            return Response({'error': 'Not authenticated'}, status=401)
+        return Response(PartnerLeadSerializer(partner.leads.all(), many=True).data)
+
+    def post(self, request):
+        partner = get_partner_from_request(request)
+        if not partner:
+            return Response({'error': 'Not authenticated'}, status=401)
+        serializer = PartnerLeadSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+        lead = serializer.save(partner=partner)
+        return Response(PartnerLeadSerializer(lead).data, status=201)
