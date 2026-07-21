@@ -114,6 +114,11 @@ class CompanyUsersView(APIView):
         _, is_platform_admin = resolve_company(request)
         if not is_platform_admin:
             return Response({'error': 'Not authorized'}, status=403)
+        if request.data.get('role') == 'super_admin':
+            return Response(
+                {'error': 'Super Admin cannot be created through this endpoint. Use the Django admin panel instead.'},
+                status=403,
+            )
         try:
             company = Company.objects.get(id=company_id)
         except Company.DoesNotExist:

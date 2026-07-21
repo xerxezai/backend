@@ -71,6 +71,24 @@ class UserManagementView(APIView):
         return Response(UserListSerializer(users, many=True).data)
 
     def post(self, request):
+        # Super Admin can no longer be granted through the API at all — only via the
+        # Django admin panel (or createsuperuser), closing off privilege escalation
+        # through this endpoint even if a client bypasses the frontend's own ROLES list.
+        if request.data.get('role') == 'super_admin':
+            return Response(
+                {'error': 'Super Admin cannot be created through this endpoint. Use the Django admin panel instead.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        company = None
+        company_id = request.data.get('company_id')
+        if company_id:
+            from apps.companies.models import Company
+            try:
+                company = Company.objects.get(id=company_id)
+            except Company.DoesNotExist:
+                return Response({'error': 'Company not found'}, status=status.HTTP_400_BAD_REQUEST)
+
         serializer = CreateUserSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -86,15 +104,14 @@ class UserManagementView(APIView):
         user.is_active = True
         user.save()
         role = data['role']
-        if role == 'super_admin':
-            user.is_superuser = True
-            user.is_staff = True
-            user.save(update_fields=['is_superuser', 'is_staff'])
-            modules = Module.objects.filter(is_active=True)
-        else:
-            modules = Module.objects.filter(name__in=data.get('modules', []))
+        modules = Module.objects.filter(name__in=data.get('modules', []))
         for module in modules:
             UserModuleAccess.objects.create(user=user, module=module, role=role, granted_by=request.user)
+
+        if company:
+            from apps.companies.models import CompanyUser
+            CompanyUser.objects.get_or_create(user=user, company=company, defaults={'role': role})
+
         return Response({'message': 'User created', 'user_id': user.id}, status=status.HTTP_201_CREATED)
 
 

@@ -38,7 +38,9 @@ class CreateUserSerializer(serializers.Serializer):
     username = serializers.CharField()
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
-    role = serializers.ChoiceField(choices=['super_admin', 'module_admin', 'regular_user', 'read_only'])
+    # 'super_admin' stays a valid choice so UserManagementView.post() can reject it with a
+    # clear 403 message *after* validation, rather than a generic "not a valid choice" 400.
+    role = serializers.ChoiceField(choices=['super_admin', 'company_admin', 'module_admin', 'regular_user', 'read_only'])
     modules = serializers.ListField(child=serializers.CharField(), required=False, default=list)
 
     def validate_username(self, value):
