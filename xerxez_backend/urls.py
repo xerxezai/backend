@@ -82,6 +82,10 @@ api_patterns = [
     # Multi-tenant companies — mounted under /api/v1/ (not the spec's standalone 'api/')
     # for the same reason.
     path('', include('apps.companies.urls')),
+
+    # Partner applications — mounted under /api/v1/ (not the spec's standalone
+    # '/api/partners/') to match this codebase's single-prefix convention.
+    path('partners/', include('apps.partners.urls')),
 ]
 
 

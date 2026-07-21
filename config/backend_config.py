@@ -226,6 +226,11 @@ class BackendConfig:
                 'companies': {
                     'enabled': True,
                     'path': 'apps.companies'
+                },
+                # ---- Partner applications ----
+                'partners': {
+                    'enabled': True,
+                    'path': 'apps.partners'
                 }
             },
             
