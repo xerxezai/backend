@@ -96,6 +96,7 @@ class Attendance(models.Model):
     # Added additively — existing rows default to blank (backfilled to 'present' via migration default)
     status = models.CharField(max_length=20, choices=ATTENDANCE_STATUS, default='present', blank=True)
     notes = models.CharField(max_length=255, blank=True)
+    is_manual = models.BooleanField(default=False, help_text='True when an admin added/edited this record by hand rather than the employee clocking in/out.')
 
     class Meta:
         ordering = ['-date']

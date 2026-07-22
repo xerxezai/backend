@@ -1,5 +1,5 @@
 import calendar
-from datetime import date
+from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -263,6 +263,8 @@ class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         qs = self.queryset
         if emp := request.query_params.get('employee'):
             qs = qs.filter(employee=emp)
+        if dept := request.query_params.get('department'):
+            qs = qs.filter(employee__department_id=dept)
         if date_from := request.query_params.get('date_from'):
             qs = qs.filter(date__gte=date_from)
         if date_to := request.query_params.get('date_to'):
@@ -270,6 +272,128 @@ class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         if att_status := request.query_params.get('status'):
             qs = qs.filter(status=att_status)
         return Response(AttendanceSerializer(qs, many=True).data)
+
+    @staticmethod
+    def _workdays_elapsed(start, end):
+        """Mon-Fri calendar days from start through end, inclusive, capped at end (never
+        counts future days as 'elapsed')."""
+        if end < start:
+            return []
+        days = []
+        d = start
+        while d <= end:
+            if d.weekday() < 5:
+                days.append(d)
+            d += timedelta(days=1)
+        return days
+
+    def _week_bounds(self, today):
+        return today - timedelta(days=today.weekday()), today
+
+    @action(detail=False, methods=['get'], url_path='my-week-stats')
+    def my_week_stats(self, request):
+        """GET /hr/attendance/my-week-stats/ — this Mon-through-today's present/late/half_day/
+        absent counts + total hours for the logged-in employee. A weekday with no Attendance
+        row and no explicit 'absent' row still counts as absent — see Attendance.status docs."""
+        employee = self._get_employee(request)
+        if not employee:
+            return Response({'present': 0, 'late': 0, 'half_day': 0, 'absent': 0, 'hours': 0})
+
+        today = date.today()
+        week_start, week_end = self._week_bounds(today)
+        workdays = self._workdays_elapsed(week_start, week_end)
+        records = {a.date: a for a in Attendance.objects.filter(employee=employee, date__range=(week_start, week_end))}
+
+        present = late = half_day = absent = 0
+        hours = 0.0
+        for d in workdays:
+            att = records.get(d)
+            if not att or att.status == 'absent':
+                absent += 1
+                continue
+            hours += float(att.hours or 0)
+            if att.status == 'late':
+                late += 1
+            elif att.status == 'half_day':
+                half_day += 1
+            else:
+                present += 1
+        return Response({'present': present, 'late': late, 'half_day': half_day, 'absent': absent, 'hours': round(hours, 2)})
+
+    @action(detail=False, methods=['get'], url_path='my-month-summary')
+    def my_month_summary(self, request):
+        """GET /hr/attendance/my-month-summary/?year=&month= — defaults to the current month."""
+        employee = self._get_employee(request)
+        today = date.today()
+        year = int(request.query_params.get('year') or today.year)
+        month = int(request.query_params.get('month') or today.month)
+        month_start = date(year, month, 1)
+        _, last_day = calendar.monthrange(year, month)
+        month_end = min(date(year, month, last_day), today) if (year, month) == (today.year, today.month) else date(year, month, last_day)
+        if not employee:
+            return Response({'working_days': 0, 'present': 0, 'absent': 0, 'half_day': 0, 'hours': 0, 'percentage': 0})
+
+        workdays = self._workdays_elapsed(month_start, month_end)
+        records = {a.date: a for a in Attendance.objects.filter(employee=employee, date__range=(month_start, month_end))}
+
+        present = half_day = absent = 0
+        hours = 0.0
+        for d in workdays:
+            att = records.get(d)
+            if not att or att.status == 'absent':
+                absent += 1
+                continue
+            hours += float(att.hours or 0)
+            if att.status == 'half_day':
+                half_day += 1
+            else:
+                present += 1
+        working_days = len(workdays)
+        percentage = round((present + half_day * 0.5) / working_days * 100, 1) if working_days else 0
+        return Response({
+            'working_days': working_days, 'present': present, 'absent': absent, 'half_day': half_day,
+            'hours': round(hours, 2), 'percentage': percentage,
+        })
+
+    @action(detail=False, methods=['get'], url_path='my-calendar')
+    def my_calendar(self, request):
+        """GET /hr/attendance/my-calendar/?year=&month= — one entry per day of the month with a
+        display status: present/late/half_day/absent (past weekday, no record), weekend, or future."""
+        employee = self._get_employee(request)
+        today = date.today()
+        year = int(request.query_params.get('year') or today.year)
+        month = int(request.query_params.get('month') or today.month)
+        _, last_day = calendar.monthrange(year, month)
+        records = {}
+        if employee:
+            records = {
+                a.date: a.status for a in
+                Attendance.objects.filter(employee=employee, date__year=year, date__month=month)
+            }
+
+        days = []
+        for day_num in range(1, last_day + 1):
+            d = date(year, month, day_num)
+            if d > today:
+                days.append({'date': d.isoformat(), 'status': 'future'})
+            elif d.weekday() >= 5:
+                days.append({'date': d.isoformat(), 'status': 'weekend'})
+            elif d in records:
+                days.append({'date': d.isoformat(), 'status': records[d] or 'present'})
+            else:
+                days.append({'date': d.isoformat(), 'status': 'absent'})
+        return Response(days)
+
+    @action(detail=False, methods=['post'], url_path='send-daily-report')
+    def send_daily_report(self, request):
+        """POST /hr/attendance/send-daily-report/ — admin-triggered (or hit by an external
+        scheduler, e.g. a Railway Cron Job) run of the same report `send_daily_attendance_report`
+        emails automatically. See that management command for the schedule-setup note."""
+        if not request.user.is_staff:
+            return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
+        from django.core.management import call_command
+        call_command('send_daily_attendance_report')
+        return Response({'message': 'Daily attendance report sent.'})
 
     @action(detail=False, methods=['get'], url_path='summary')
     def summary(self, request):

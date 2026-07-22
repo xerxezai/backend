@@ -49,10 +49,22 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
 class AttendanceSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source='employee.full_name', read_only=True)
+    department_name = serializers.CharField(source='employee.department.name', read_only=True, default=None)
 
     class Meta:
         model = Attendance
         fields = '__all__'
+
+    def validate(self, attrs):
+        # hours is always derived from check_in/check_out — for self-service clock-out
+        # (see AttendanceViewSet.clock_out) and for manual admin entries alike, so "Clock Out
+        # minus Clock In" is the one source of truth regardless of how the record was made.
+        check_in = attrs.get('check_in', getattr(self.instance, 'check_in', None))
+        check_out = attrs.get('check_out', getattr(self.instance, 'check_out', None))
+        if check_in and check_out:
+            delta = check_out - check_in
+            attrs['hours'] = round(max(delta.total_seconds(), 0) / 3600, 2)
+        return attrs
 
 
 class LeaveRequestSerializer(serializers.ModelSerializer):
