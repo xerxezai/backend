@@ -33,16 +33,34 @@ class Employee(models.Model):
         ('resigned', 'Resigned'),
         ('terminated', 'Terminated'),
     ]
+    GENDER = [
+        ('male', 'Male'),
+        ('female', 'Female'),
+        ('other', 'Other'),
+        ('prefer_not_to_say', 'Prefer not to say'),
+    ]
+    CURRENCY = [
+        ('INR', 'INR'),
+        ('AED', 'AED'),
+        ('USD', 'USD'),
+    ]
     code = models.CharField(max_length=20, unique=True, help_text='e.g. EMP-0001')
     user = models.OneToOneField(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='employee_profile')
     full_name = models.CharField(max_length=200)
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=40, blank=True, validators=[validate_phone_with_country_code])
+    profile_photo = models.ImageField(upload_to='hr/employees/photos/', null=True, blank=True)
     department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.SET_NULL, related_name='employees')
     designation = models.CharField(max_length=120, blank=True)
     joined_on = models.DateField(null=True, blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    gender = models.CharField(max_length=20, choices=GENDER, blank=True)
+    address = models.TextField(blank=True)
+    emergency_contact_name = models.CharField(max_length=200, blank=True)
+    emergency_contact_phone = models.CharField(max_length=40, blank=True, validators=[validate_phone_with_country_code])
     status = models.CharField(max_length=20, choices=STATUS, default='active')
     salary = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    salary_currency = models.CharField(max_length=3, choices=CURRENCY, default='INR')
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_employees',
         help_text='Who created this record — drives RBAC data-level filtering for Regular User/Read Only roles.',
