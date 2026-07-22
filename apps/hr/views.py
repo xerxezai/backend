@@ -17,6 +17,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from apps.core.email import send_via_resend
 from apps.rbac.mixins import RBACScopedMixin
 from apps.rbac.permissions import ReadOnlyOrHigher
+from apps.rbac.utils import get_user_role
 from apps.companies.mixins import CompanyScopedMixin
 from .models import (Attendance, Department, Employee, LeaveRequest, PaySlip,
                      Payroll, SalaryStructure, Shift,
@@ -97,6 +98,27 @@ Your {leave.get_type_display()} leave request from {leave.from_date} to {leave.t
     send_via_resend(to=leave.employee.email, subject=subject, html=html, text=plain, from_email=FROM_EMAIL)
 
 
+def _is_hr_privileged(user):
+    """Super Admin / Admin (Django is_staff or is_superuser) / HR Manager (RBAC module_admin
+    scoped to the 'hr' module) — the roles that see and manage every employee's attendance,
+    leave and payroll data. Everyone else only sees records for their own linked Employee.
+
+    HR Manager is deliberately NOT scoped down to "records they created" the way
+    apps.rbac.utils.filter_queryset_by_role treats module_admin for other modules — an HR
+    Manager needs company-wide HR visibility, so this is a bespoke check rather than a reuse
+    of RBACScopedMixin."""
+    if user.is_staff or user.is_superuser:
+        return True
+    return get_user_role(user, 'hr') in ('super_admin', 'company_admin', 'module_admin')
+
+
+def _own_employee_or_none(request):
+    try:
+        return request.user.employee_profile
+    except Exception:
+        return None
+
+
 DEFAULT_ONBOARDING_TASKS = [
     'Email account created',
     'Laptop/equipment assigned',
@@ -128,6 +150,16 @@ class EmployeeViewSet(RBACScopedMixin, viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter, DjangoFilterBackend]
     search_fields = ['full_name', 'email', 'code']
     filterset_fields = ['department', 'status']
+
+    @action(detail=False, methods=['get'], url_path='me')
+    def me(self, request):
+        """GET /hr/employees/me/ — the caller's own Employee record, resolved directly from
+        request.user.employee_profile (bypasses RBAC list scoping, same as the other
+        self-service my-* actions elsewhere in this app)."""
+        employee = _own_employee_or_none(request)
+        if not employee:
+            return Response({'detail': 'No employee profile linked to your account.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(EmployeeSerializer(employee, context={'request': request}).data)
 
     @action(detail=False, methods=['get'], url_path='linkable-users')
     def linkable_users(self, request):
@@ -172,11 +204,35 @@ class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     filterset_fields = ['employee', 'date', 'status']
     ordering_fields = ['date']
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            return qs.filter(employee=employee) if employee else qs.none()
+        return qs
+
+    def _require_privileged(self):
+        # Regular employees manage their own attendance only through clock-in/clock-out —
+        # direct create/update/delete on this base endpoint is how "Add Manual Attendance"
+        # writes, and that's Admin/HR Manager only.
+        if not _is_hr_privileged(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Admin only.')
+
+    def perform_create(self, serializer):
+        self._require_privileged()
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._require_privileged()
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._require_privileged()
+        super().perform_destroy(instance)
+
     def _get_employee(self, request):
-        try:
-            return request.user.employee_profile
-        except Exception:
-            return None
+        return _own_employee_or_none(request)
 
     @action(detail=False, methods=['post'], url_path='clock-in')
     def clock_in(self, request):
@@ -260,7 +316,7 @@ class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='report')
     def report(self, request):
-        if not request.user.is_staff:
+        if not _is_hr_privileged(request.user):
             return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
         qs = self.queryset
         if emp := request.query_params.get('employee'):
@@ -391,7 +447,7 @@ class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         """POST /hr/attendance/send-daily-report/ — admin-triggered (or hit by an external
         scheduler, e.g. a Railway Cron Job) run of the same report `send_daily_attendance_report`
         emails automatically. See that management command for the schedule-setup note."""
-        if not request.user.is_staff:
+        if not _is_hr_privileged(request.user):
             return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
         from django.core.management import call_command
         call_command('send_daily_attendance_report')
@@ -400,6 +456,8 @@ class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='summary')
     def summary(self, request):
         """GET /hr/attendance/summary/?employee_id=&month=&year= — per-employee monthly counts."""
+        if not _is_hr_privileged(request.user):
+            return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
         month = request.query_params.get('month')
         year = request.query_params.get('year')
         qs = Attendance.objects.all()
@@ -442,6 +500,9 @@ class LeaveRequestViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            qs = qs.filter(employee=employee) if employee else qs.none()
         date_from = self.request.query_params.get('date_from')
         date_to = self.request.query_params.get('date_to')
         if date_from:
@@ -452,11 +513,18 @@ class LeaveRequestViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         employee = serializer.validated_data.get('employee')
-        serializer.save(company=employee.company if employee else None)
+        if not _is_hr_privileged(self.request.user):
+            # Regular employees can only file a leave request for themselves — ignore
+            # whatever `employee` the client submitted and use their own linked profile.
+            employee = _own_employee_or_none(self.request)
+            if not employee:
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied('No employee profile linked to your account.')
+        serializer.save(employee=employee, company=employee.company if employee else None)
 
     @action(detail=True, methods=['patch'], url_path='approve')
     def approve(self, request, pk=None):
-        if not request.user.is_staff:
+        if not _is_hr_privileged(request.user):
             return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
         leave = self.get_object()
         action_val = request.data.get('action', 'approved')
@@ -488,6 +556,11 @@ class LeaveRequestViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         if not employee_id or not leave_type:
             return Response({'detail': 'employee and leave_type query params are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        if not _is_hr_privileged(request.user):
+            own_employee = _own_employee_or_none(request)
+            if not own_employee or str(own_employee.id) != str(employee_id):
+                return Response({'detail': 'You can only view your own leave balance.'}, status=status.HTTP_403_FORBIDDEN)
+
         year = timezone.now().year
         used = LeaveRequest.objects.filter(
             employee_id=employee_id, type=leave_type, status='approved', from_date__year=year,
@@ -517,6 +590,13 @@ class SalaryStructureViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee']
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            return qs.filter(employee=employee) if employee else qs.none()
+        return qs
+
     def perform_create(self, serializer):
         employee = serializer.validated_data.get('employee')
         serializer.save(company=employee.company if employee else None)
@@ -532,9 +612,16 @@ class PayrollViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     filterset_fields = ['employee', 'month', 'year', 'status']
     ordering_fields = ['year', 'month']
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            return qs.filter(employee=employee) if employee else qs.none()
+        return qs
+
     @action(detail=False, methods=['post'], url_path='generate')
     def generate(self, request):
-        if not request.user.is_staff:
+        if not _is_hr_privileged(request.user):
             return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
 
         month = request.data.get('month')
@@ -618,7 +705,7 @@ class PayrollViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['patch'], url_path='approve')
     def approve(self, request, pk=None):
-        if not request.user.is_staff:
+        if not _is_hr_privileged(request.user):
             return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
         payroll = self.get_object()
         payroll.status = 'approved'
@@ -627,7 +714,7 @@ class PayrollViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['patch'], url_path='mark-paid')
     def mark_paid(self, request, pk=None):
-        if not request.user.is_staff:
+        if not _is_hr_privileged(request.user):
             return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
         payroll = self.get_object()
         payroll.status = 'paid'
@@ -653,7 +740,7 @@ class PayrollViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='report')
     def report(self, request):
-        if not request.user.is_staff:
+        if not _is_hr_privileged(request.user):
             return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
         qs = self.queryset
         if month := request.query_params.get('month'):
@@ -670,6 +757,13 @@ class PaySlipViewSet(CompanyScopedMixin, viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['payroll__employee', 'payroll__month', 'payroll__year']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            return qs.filter(payroll__employee=employee) if employee else qs.none()
+        return qs
 
 
 class PerformanceReviewViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
