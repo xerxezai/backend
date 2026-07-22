@@ -102,5 +102,5 @@ There is no automated test suite — verify changes with `python manage.py check
 ## Contact
 
 - Website: [xerxez.com](https://www.xerxez.com)
-- Email: info@xerxez.com
+- Email: xerxez.in@gmail.com
 - ERP Portal: [xerxez.com/erp](https://www.xerxez.com/erp)

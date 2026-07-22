@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 ADMIN_EMAIL = getattr(settings, 'CONTACT_ADMIN_EMAIL', 'xerxez.in@gmail.com')
 # TEMPORARY: xerxez.com is not yet verified in Resend, so sends must use
 # Resend's shared onboarding@resend.dev sender until domain verification
-# completes. Switch back to CONTACT_FROM_EMAIL (info@xerxez.com) once verified.
+# completes. Switch back to CONTACT_FROM_EMAIL (xerxez.in@gmail.com) once verified.
 FROM_EMAIL = 'onboarding@resend.dev'
 
 
@@ -175,7 +175,7 @@ For urgent matters, call us at +971 56 786 7451.
 
 Best regards,
 The XERXEZ Team
-info@xerxez.com | xerxez.com
+xerxez.in@gmail.com | xerxez.com
 """.strip()
 
     html = f"""<!DOCTYPE html>
@@ -213,7 +213,7 @@ info@xerxez.com | xerxez.com
        <a href="tel:+971567867451" style="color:#D4A853">+971 56 786 7451</a>.</p>
     <p>Best regards,<br><strong>The XERXEZ Team</strong></p>
   </div>
-  <div class="ftr">XERXEZ &nbsp;·&nbsp; info@xerxez.com &nbsp;·&nbsp; xerxez.com</div>
+  <div class="ftr">XERXEZ &nbsp;·&nbsp; xerxez.in@gmail.com &nbsp;·&nbsp; xerxez.com</div>
 </div>
 </body>
 </html>"""

@@ -92,9 +92,9 @@ def _send_safe(subject, message, recipient_list):
 # ── Resend notification emails ───────────────────────────────────────────────
 # TEMPORARY: xerxez.com is not yet verified in Resend, so sends must use
 # Resend's shared onboarding@resend.dev sender until domain verification
-# completes. Switch to CONTACT_FROM_EMAIL (info@xerxez.com) once verified.
+# completes. Switch to CONTACT_FROM_EMAIL (xerxez.in@gmail.com) once verified.
 LMA_FROM_EMAIL = 'onboarding@resend.dev'
-LMA_ADMIN_EMAIL = getattr(django_settings, 'CONTACT_ADMIN_EMAIL', 'info@xerxez.com')
+LMA_ADMIN_EMAIL = getattr(django_settings, 'CONTACT_ADMIN_EMAIL', 'xerxez.in@gmail.com')
 
 _EMAIL_STYLE = """
   body{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;padding:0}
@@ -121,7 +121,7 @@ def _lma_email_shell(heading: str, body_html: str) -> str:
 <div class="wrap">
   <div class="hdr"><h1>XERXEZ</h1><p>{heading}</p></div>
   <div class="body">{body_html}</div>
-  <div class="ftr">XERXEZ Academy &nbsp;·&nbsp; info@xerxez.com &nbsp;·&nbsp; xerxez.com</div>
+  <div class="ftr">XERXEZ Academy &nbsp;·&nbsp; xerxez.in@gmail.com &nbsp;·&nbsp; xerxez.com</div>
 </div>
 </body>
 </html>"""
@@ -134,7 +134,7 @@ def _send_enrollment_emails(student, course):
     student_plain = (
         f"Hi {first},\n\n"
         f"You're enrolled in \"{course.title}\"! Head to your student dashboard to start learning.\n\n"
-        f"Best regards,\nThe XERXEZ Academy Team\ninfo@xerxez.com | xerxez.com"
+        f"Best regards,\nThe XERXEZ Academy Team\nxerxez.in@gmail.com | xerxez.com"
     )
     student_html = _lma_email_shell("Enterprise AI & ERP Solutions", f"""
       <p>Hi {first},</p>
@@ -174,7 +174,7 @@ def _send_completion_email(student, course):
     plain = (
         f"Congratulations {first}!\n\n"
         f"You've completed \"{course.title}\". Your certificate is now available on your student dashboard.\n\n"
-        f"Best regards,\nThe XERXEZ Academy Team\ninfo@xerxez.com | xerxez.com"
+        f"Best regards,\nThe XERXEZ Academy Team\nxerxez.in@gmail.com | xerxez.com"
     )
     html = _lma_email_shell("Course Completed", f"""
       <p>Congratulations {first}!</p>
@@ -193,7 +193,7 @@ def _send_instructor_assigned_email(instructor, course):
         f"Hi {first},\n\n"
         f"You've been assigned as the instructor for \"{course.title}\". "
         f"You can manage it from your instructor dashboard.\n\n"
-        f"Best regards,\nThe XERXEZ Academy Team\ninfo@xerxez.com | xerxez.com"
+        f"Best regards,\nThe XERXEZ Academy Team\nxerxez.in@gmail.com | xerxez.com"
     )
     html = _lma_email_shell("Instructor Assignment", f"""
       <p>Hi {first},</p>
