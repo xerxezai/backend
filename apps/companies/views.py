@@ -9,7 +9,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from apps.rbac.models import Module, UserModuleAccess
 from .models import Company, CompanyUser
 from .serializers import CompanySerializer, CompanyUserSerializer
-from .utils import resolve_company, get_user_company_role
+from .utils import resolve_company, get_user_company, get_user_company_role
 
 User = get_user_model()
 
@@ -124,6 +124,13 @@ class CompanyUsersView(APIView):
         except Company.DoesNotExist:
             return Response({'error': 'Not found'}, status=404)
 
+        current_users = CompanyUser.objects.filter(company=company, is_active=True).count()
+        if current_users >= company.max_users:
+            return Response({
+                'error': f'User limit reached. This company can have a maximum of {company.max_users} users. '
+                         f'Please contact XERXEZ to increase the limit.',
+            }, status=400)
+
         data = request.data
         for field in ('username', 'email', 'password', 'full_name'):
             if not data.get(field):
@@ -145,10 +152,13 @@ class CompanyUsersView(APIView):
 
             CompanyUser.objects.create(company=company, user=user, role=role)
 
+            # role is passed straight through to UserModuleAccess (including 'company_admin'
+            # verbatim) — apps.rbac.utils.get_user_role() resolves it correctly since that
+            # role became a real UserModuleAccess choice; no more downgrading it to
+            # 'module_admin' the way this used to work around the old, incomplete role list.
             module_names = ALL_MODULE_NAMES if role == 'company_admin' else (data.get('modules') or [])
-            rbac_role = 'module_admin' if role == 'company_admin' else role
             for module in Module.objects.filter(name__in=module_names):
-                UserModuleAccess.objects.create(user=user, module=module, role=rbac_role, granted_by=request.user)
+                UserModuleAccess.objects.create(user=user, module=module, role=role, granted_by=request.user)
         except Exception as e:
             return Response({'error': str(e)}, status=400)
 
@@ -178,6 +188,159 @@ class SwitchCompanyView(APIView):
         return Response({
             'message': f'Switched to {company.name}',
             'company': {'id': company.id, 'name': company.name},
+        })
+
+
+def _resolve_my_company(request):
+    """(company, error_response) — Company Admin manages their own company; a Super
+    Admin manages whichever company they've switched to via the Company Switcher."""
+    if request.user.is_superuser:
+        company, _ = resolve_company(request)
+        if not company:
+            return None, Response({'error': 'Switch to a company first.'}, status=400)
+        return company, None
+    if get_user_company_role(request.user) != 'company_admin':
+        return None, Response({'error': 'Company Admin access required.'}, status=403)
+    company = get_user_company(request.user)
+    if not company:
+        return None, Response({'error': 'No company assigned.'}, status=400)
+    return company, None
+
+
+class MyCompanyUsersView(APIView):
+    """Company Admin self-service — list/add users within their own company only.
+    Mirrors CompanyUsersView but is scoped to the caller's own company (resolved from
+    the JWT, never a company_id in the URL) and can never create a Super Admin or
+    another Company Admin."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        company, err = _resolve_my_company(request)
+        if err:
+            return err
+        users = CompanyUser.objects.select_related('user').filter(company=company)
+        return Response(CompanyUserSerializer(users, many=True).data)
+
+    def post(self, request):
+        company, err = _resolve_my_company(request)
+        if err:
+            return err
+
+        role = request.data.get('role', 'regular_user')
+        if role in ('super_admin', 'company_admin'):
+            return Response({'error': 'You cannot create a Super Admin or Company Admin account.'}, status=403)
+
+        current_users = CompanyUser.objects.filter(company=company, is_active=True).count()
+        if current_users >= company.max_users:
+            return Response({
+                'error': f'User limit reached. This company can have a maximum of {company.max_users} users. '
+                         f'Contact XERXEZ to increase your limit.',
+            }, status=400)
+
+        data = request.data
+        for field in ('username', 'email', 'password', 'full_name'):
+            if not data.get(field):
+                return Response({'error': f'{field} is required.'}, status=400)
+        if User.objects.filter(username=data['username']).exists():
+            return Response({'error': 'A user with that username already exists.'}, status=400)
+        if User.objects.filter(email=data['email']).exists():
+            return Response({'error': 'A user with that email already exists.'}, status=400)
+        if not data.get('modules'):
+            return Response({'error': 'Assign at least one module for this role.'}, status=400)
+
+        name_parts = data['full_name'].split(' ', 1)
+        try:
+            user = User.objects.create_user(
+                username=data['username'], email=data['email'], password=data['password'],
+                first_name=name_parts[0], last_name=name_parts[1] if len(name_parts) > 1 else '',
+            )
+            user.is_active = True
+            user.save(update_fields=['is_active'])
+            CompanyUser.objects.create(company=company, user=user, role=role)
+            for module in Module.objects.filter(name__in=data.get('modules') or []):
+                UserModuleAccess.objects.create(user=user, module=module, role=role, granted_by=request.user)
+        except Exception as e:
+            return Response({'error': str(e)}, status=400)
+
+        return Response({'message': 'User added', 'user_id': user.id}, status=201)
+
+
+class MyCompanyUserDetailView(APIView):
+    """Company Admin self-service — edit or deactivate one user in their own company.
+    Never touches Super Admin or Company Admin accounts."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _get_membership(self, company, user_id):
+        try:
+            return CompanyUser.objects.select_related('user').get(company=company, user_id=user_id), None
+        except CompanyUser.DoesNotExist:
+            return None, Response({'error': 'User not found in your company.'}, status=404)
+
+    def put(self, request, user_id):
+        company, err = _resolve_my_company(request)
+        if err:
+            return err
+        membership, err = self._get_membership(company, user_id)
+        if err:
+            return err
+        if membership.user.is_superuser or membership.role in ('super_admin', 'company_admin'):
+            return Response({'error': 'You cannot edit a Super Admin or Company Admin account.'}, status=403)
+
+        new_role = request.data.get('role')
+        if new_role in ('super_admin', 'company_admin'):
+            return Response({'error': 'You cannot promote a user to Super Admin or Company Admin.'}, status=403)
+        if new_role:
+            membership.role = new_role
+            membership.save(update_fields=['role'])
+
+        modules = request.data.get('modules')
+        if modules is not None:
+            UserModuleAccess.objects.filter(user=membership.user).delete()
+            for module in Module.objects.filter(name__in=modules):
+                UserModuleAccess.objects.create(
+                    user=membership.user, module=module, role=new_role or membership.role, granted_by=request.user,
+                )
+
+        return Response(CompanyUserSerializer(membership).data)
+
+    def delete(self, request, user_id):
+        company, err = _resolve_my_company(request)
+        if err:
+            return err
+        membership, err = self._get_membership(company, user_id)
+        if err:
+            return err
+        if membership.user.is_superuser or membership.role in ('super_admin', 'company_admin'):
+            return Response(
+                {'error': 'You cannot deactivate a Super Admin or Company Admin. Contact XERXEZ to remove admin access.'},
+                status=403,
+            )
+        membership.is_active = False
+        membership.save(update_fields=['is_active'])
+        membership.user.is_active = False
+        membership.user.save(update_fields=['is_active'])
+        return Response({'message': 'User deactivated'})
+
+
+class MyCompanyStatsView(APIView):
+    """Company Admin self-service — user-limit usage for their own company."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        company, err = _resolve_my_company(request)
+        if err:
+            return err
+        active = CompanyUser.objects.filter(company=company, is_active=True)
+        current = active.count()
+        return Response({
+            'company_name': company.name,
+            'max_users': company.max_users,
+            'current_users': current,
+            'remaining_slots': max(company.max_users - current, 0),
+            'users_by_role': {choice[0]: active.filter(role=choice[0]).count() for choice in CompanyUser.ROLE_CHOICES},
         })
 
 
