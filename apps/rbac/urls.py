@@ -1,7 +1,7 @@
 from django.urls import path
 
 from .views import (
-    ModuleListView, MyAccessView, UserManagementView, UserDetailView,
+    ModuleListView, MyAccessView, UserManagementView, UserDetailView, UserPermanentDeleteView,
     GrantAccessView, AccessRequestView, AccessRequestActionView,
 )
 
@@ -11,6 +11,7 @@ urlpatterns = [
     path('users/', UserManagementView.as_view()),
     path('users/create/', UserManagementView.as_view()),
     path('users/<int:user_id>/', UserDetailView.as_view()),
+    path('users/<int:user_id>/permanent-delete/', UserPermanentDeleteView.as_view()),
     path('users/<int:user_id>/grant-access/', GrantAccessView.as_view()),
     path('users/<int:user_id>/revoke-access/', GrantAccessView.as_view()),
     path('access-requests/', AccessRequestView.as_view()),

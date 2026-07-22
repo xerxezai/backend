@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.contrib.auth import get_user_model
+from django.db.models import ProtectedError
 from django.utils import timezone
 
 from .models import Module, UserModuleAccess, AccessRequest
@@ -160,6 +161,33 @@ class UserDetailView(APIView):
         user.is_active = False
         user.save(update_fields=['is_active'])
         return Response({'message': 'User deactivated'})
+
+
+class UserPermanentDeleteView(APIView):
+    """DELETE /api/v1/rbac/users/{id}/permanent-delete/ — irreversible, unlike UserDetailView.delete()
+    which only deactivates. Refuses Super Admins and self-deletion, and refuses if the user
+    owns any PROTECTed records (QHSE incidents/risks/checklists, EPC project management roles)
+    so those aren't silently orphaned — those must be reassigned or resolved first."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def delete(self, request, user_id):
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=404)
+        if user.is_superuser:
+            return Response({'error': 'Super Admin accounts cannot be permanently deleted.'}, status=403)
+        if user.id == request.user.id:
+            return Response({'error': 'You cannot delete your own account.'}, status=403)
+        try:
+            user.delete()
+        except ProtectedError:
+            return Response(
+                {'error': 'This user owns records that cannot be orphaned (e.g. QHSE incidents, risk register entries, project management assignments). Reassign or resolve those first, or deactivate the user instead.'},
+                status=409,
+            )
+        return Response({'message': 'User permanently deleted'})
 
 
 class GrantAccessView(APIView):
