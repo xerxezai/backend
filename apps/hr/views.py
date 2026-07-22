@@ -3,6 +3,7 @@ from datetime import date
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Count
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
@@ -36,7 +37,9 @@ DEFAULT_ONBOARDING_TASKS = [
 
 
 class DepartmentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
-    queryset = Department.objects.all()
+    queryset = Department.objects.select_related('head', 'manager').annotate(
+        employee_count=Count('employees', distinct=True),
+    ).all()
     serializer_class = DepartmentSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]

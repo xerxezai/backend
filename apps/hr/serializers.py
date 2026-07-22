@@ -16,7 +16,10 @@ def _gen_code(model, prefix, pad=3):
 
 class DepartmentSerializer(serializers.ModelSerializer):
     code = serializers.CharField(required=False, allow_blank=True)
-    manager_username = serializers.CharField(source='manager.username', read_only=True)
+    manager_username = serializers.CharField(source='manager.username', read_only=True, default=None)
+    head_name = serializers.CharField(source='head.full_name', read_only=True, default=None)
+    head_code = serializers.CharField(source='head.code', read_only=True, default=None)
+    employee_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Department

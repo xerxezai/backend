@@ -12,8 +12,12 @@ class Department(models.Model):
     )
     code = models.CharField(max_length=20, unique=True)
     name = models.CharField(max_length=120, unique=True)
+    description = models.TextField(blank=True)
     manager = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='managed_departments')
+    head = models.ForeignKey('Employee', null=True, blank=True, on_delete=models.SET_NULL, related_name='headed_departments')
     parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='children')
+    color = models.CharField(max_length=20, default='#c8a84b')
+    icon = models.CharField(max_length=50, default='briefcase')
 
     class Meta:
         ordering = ['name']
