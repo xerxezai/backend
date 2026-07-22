@@ -62,10 +62,13 @@ class RBACScopedMixin:
 
         # A Company Admin sees everything within their own company (they're the
         # super_admin of that one tenant), not just what they personally created.
-        if company:
-            from apps.companies.utils import get_user_company_role
-            if get_user_company_role(self.request.user) == 'company_admin':
-                return queryset
+        # Uses the RBAC role (UserModuleAccess, kept current by User Management's Edit
+        # Access modal) rather than CompanyUser.role, which is only ever set once at
+        # user-creation time and never updated on a later role edit — checking it here
+        # meant a user promoted to Company Admin after creation never actually got the
+        # company-wide view despite the UI showing them as Company Admin everywhere else.
+        if company and get_user_role(self.request.user) == 'company_admin':
+            return queryset
 
         return filter_queryset_by_role(
             queryset, self.request.user, self.rbac_module, user_field=self.rbac_user_field,

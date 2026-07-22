@@ -41,15 +41,27 @@ def has_module_access(user, module_name):
 
 
 def filter_queryset_by_role(queryset, user, module_name, user_field='created_by'):
-    """Global data-isolation rule: only super_admin sees everything; every other
-    authenticated user (module_admin, regular_user, read_only) sees only records
-    they own via `user_field` (default created_by; use e.g. 'quotation__created_by'
-    for child rows owned through their parent)."""
+    """Global data-isolation rule: super_admin and company_admin see everything (company_admin
+    scoped to their own company); module_admin, regular_user and read_only see only records
+    they own via `user_field` (default created_by; use e.g. 'quotation__created_by' for child
+    rows owned through their parent).
+
+    Note: RBACScopedMixin.rbac_scope() already short-circuits company_admin (and platform
+    admins) with full company-wide access before this function is ever called — the
+    company_admin branch here exists so this function is still correct on its own if called
+    directly, without needing to duplicate that tenant-resolution logic at every call site."""
     if not user or not user.is_authenticated:
         return queryset.none()
     if user.is_superuser:
         return queryset
-    if get_user_role(user, module_name) == 'super_admin':
+    role = get_user_role(user, module_name)
+    if role == 'super_admin':
+        return queryset
+    if role == 'company_admin':
+        from apps.companies.utils import get_user_company
+        company = get_user_company(user)
+        if company and hasattr(queryset.model, 'company'):
+            return queryset.filter(company=company)
         return queryset
     try:
         return queryset.filter(**{user_field: user})

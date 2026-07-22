@@ -16,6 +16,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 
 from apps.core.email import send_via_resend
 from apps.rbac.mixins import RBACScopedMixin
+from apps.rbac.permissions import ReadOnlyOrHigher
 from apps.companies.mixins import CompanyScopedMixin
 from .models import (Attendance, Department, Employee, LeaveRequest, PaySlip,
                      Payroll, SalaryStructure, Shift,
@@ -110,7 +111,8 @@ class DepartmentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     ).all()
     serializer_class = DepartmentSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    module_name = 'hr'
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'code']
 
@@ -376,14 +378,16 @@ class ShiftViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Shift.objects.prefetch_related('employees').all()
     serializer_class = ShiftSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    module_name = 'hr'
 
 
 class SalaryStructureViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = SalaryStructure.objects.select_related('employee').all()
     serializer_class = SalaryStructureSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    module_name = 'hr'
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee']
 
@@ -396,7 +400,8 @@ class PayrollViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Payroll.objects.select_related('employee', 'generated_by').all()
     serializer_class = PayrollSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    module_name = 'hr'
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['employee', 'month', 'year', 'status']
     ordering_fields = ['year', 'month']
@@ -545,7 +550,8 @@ class PerformanceReviewViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = PerformanceReview.objects.select_related('employee', 'reviewer').all()
     serializer_class = PerformanceReviewSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    module_name = 'hr'
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee', 'rating']
 
@@ -558,7 +564,8 @@ class EmployeeDocumentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = EmployeeDocument.objects.select_related('employee').all()
     serializer_class = EmployeeDocumentSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    module_name = 'hr'
     parser_classes = [MultiPartParser, FormParser]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee', 'doc_type']
@@ -568,7 +575,8 @@ class OnboardingChecklistViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = OnboardingChecklist.objects.select_related('employee').all()
     serializer_class = OnboardingChecklistSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    module_name = 'hr'
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee', 'completed']
 
@@ -585,7 +593,8 @@ class ExitManagementViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = ExitManagement.objects.select_related('employee').all()
     serializer_class = ExitManagementSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    module_name = 'hr'
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee', 'reason', 'settlement_paid']
 
