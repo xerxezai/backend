@@ -1,15 +1,20 @@
 import logging
+from datetime import timedelta
 
 from django.conf import settings
+from django.db.models import Q
+from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from apps.core.email import send_via_resend
 from apps.crm.models import Lead
+from apps.rbac.views import IsSuperAdmin
 from .models import ContactMessage
-from .serializers import ContactMessageSerializer
+from .serializers import ContactMessageSerializer, ContactInquirySerializer
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,8 @@ URGENCY_LABELS = {
 # service's enquiry email only lists the qualification fields relevant to it.
 QUALIFICATION_FIELDS = [
     ('Country', 'country'),
+    ('Industry', 'industry'),
+    ('Current Challenge', 'current_challenge'),
     ('Plan Interest', 'plan_interest'),
     ('Team Size', 'team_size'),
     ('Timeline', 'timeline'),
@@ -279,3 +286,96 @@ class ContactMessageCreateView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+# ── Contact Inquiries admin (super_admin only) ───────────────────────────────
+
+class ContactInquiryListView(APIView):
+    """GET /api/v1/contact/inquiries/ — all contact messages, with filters."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request):
+        qs = ContactMessage.objects.select_related('assigned_to').all()
+        p = request.query_params
+
+        if p.get('status'):
+            qs = qs.filter(status=p['status'])
+        if p.get('priority'):
+            qs = qs.filter(priority=p['priority'])
+        if p.get('service'):
+            qs = qs.filter(service=p['service'])
+        if p.get('date_from'):
+            qs = qs.filter(created_at__date__gte=p['date_from'])
+        if p.get('date_to'):
+            qs = qs.filter(created_at__date__lte=p['date_to'])
+        if p.get('search'):
+            s = p['search']
+            qs = qs.filter(Q(full_name__icontains=s) | Q(email__icontains=s) | Q(company__icontains=s))
+
+        return Response(ContactInquirySerializer(qs, many=True).data)
+
+
+class ContactInquiryDetailView(APIView):
+    """GET/PUT/DELETE /api/v1/contact/inquiries/{id}/"""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request, pk):
+        try:
+            inquiry = ContactMessage.objects.select_related('assigned_to').get(pk=pk)
+        except ContactMessage.DoesNotExist:
+            return Response({'error': 'Not found'}, status=404)
+        return Response(ContactInquirySerializer(inquiry).data)
+
+    def put(self, request, pk):
+        try:
+            inquiry = ContactMessage.objects.get(pk=pk)
+        except ContactMessage.DoesNotExist:
+            return Response({'error': 'Not found'}, status=404)
+
+        data = request.data
+        if 'status' in data:
+            if data['status'] not in dict(ContactMessage.STATUS_CHOICES):
+                return Response({'error': f'status must be one of: {", ".join(dict(ContactMessage.STATUS_CHOICES))}'}, status=400)
+            inquiry.status = data['status']
+            if data['status'] == 'replied' and not inquiry.replied_at:
+                inquiry.replied_at = timezone.now()
+        if 'priority' in data:
+            if data['priority'] not in dict(ContactMessage.PRIORITY_CHOICES):
+                return Response({'error': f'priority must be one of: {", ".join(dict(ContactMessage.PRIORITY_CHOICES))}'}, status=400)
+            inquiry.priority = data['priority']
+        if 'assigned_to' in data:
+            inquiry.assigned_to_id = data['assigned_to'] or None
+        if 'notes' in data:
+            inquiry.notes = data['notes'] or ''
+        inquiry.save()
+        return Response(ContactInquirySerializer(inquiry).data)
+
+    def delete(self, request, pk):
+        try:
+            inquiry = ContactMessage.objects.get(pk=pk)
+        except ContactMessage.DoesNotExist:
+            return Response({'error': 'Not found'}, status=404)
+        inquiry.delete()
+        return Response(status=204)
+
+
+class ContactInquiryStatsView(APIView):
+    """GET /api/v1/contact/inquiries/stats/"""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request):
+        qs = ContactMessage.objects.all()
+        now = timezone.now()
+        return Response({
+            'total': qs.count(),
+            'new': qs.filter(status='new').count(),
+            'reviewed': qs.filter(status='reviewed').count(),
+            'replied': qs.filter(status='replied').count(),
+            'closed': qs.filter(status='closed').count(),
+            'high_priority': qs.filter(priority='high').count(),
+            'this_week': qs.filter(created_at__gte=now - timedelta(days=7)).count(),
+            'this_month': qs.filter(created_at__gte=now - timedelta(days=30)).count(),
+        })

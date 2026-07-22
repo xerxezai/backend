@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 from apps.core.validators import validate_phone_with_country_code
@@ -8,6 +9,17 @@ class ContactMessage(models.Model):
         ('normal',   'Normal'),
         ('urgent',   'Urgent'),
         ('critical', 'Critical'),
+    ]
+    STATUS_CHOICES = [
+        ('new',      'New'),
+        ('reviewed', 'Reviewed'),
+        ('replied',  'Replied'),
+        ('closed',   'Closed'),
+    ]
+    PRIORITY_CHOICES = [
+        ('low',    'Low'),
+        ('medium', 'Medium'),
+        ('high',   'High'),
     ]
 
     full_name  = models.CharField(max_length=200)
@@ -22,6 +34,8 @@ class ContactMessage(models.Model):
     # Common qualification fields
     country         = models.CharField(max_length=50, blank=True)
     hear_about_us   = models.CharField(max_length=50, blank=True)
+    industry           = models.CharField(max_length=100, blank=True)
+    current_challenge  = models.CharField(max_length=200, blank=True)
 
     # AI-Powered ERP
     plan_interest   = models.CharField(max_length=50, blank=True)
@@ -55,6 +69,16 @@ class ContactMessage(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     is_read    = models.BooleanField(default=False)
+
+    # Inquiry management — admin-only, never set by the public contact form.
+    status      = models.CharField(max_length=10, choices=STATUS_CHOICES, default='new')
+    assigned_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='assigned_inquiries',
+    )
+    priority    = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
+    notes       = models.TextField(blank=True)
+    replied_at  = models.DateTimeField(null=True, blank=True)
+    updated_at  = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['-created_at']
