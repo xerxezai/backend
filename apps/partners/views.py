@@ -272,7 +272,13 @@ class PartnerLoginView(APIView):
         if not email or not password:
             return Response({'error': 'Email and password are required.'}, status=400)
 
-        user = authenticate(request, username=email, password=password)
+        # Django's ModelBackend authenticates by USERNAME_FIELD ('username'), not email —
+        # this form collects email, so resolve it to the account's username first.
+        user_obj = User.objects.filter(email__iexact=email).first()
+        if not user_obj:
+            return Response({'error': 'Invalid email or password.'}, status=401)
+
+        user = authenticate(request, username=user_obj.username, password=password)
         if not user:
             return Response({'error': 'Invalid email or password.'}, status=401)
 
