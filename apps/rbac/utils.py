@@ -19,6 +19,8 @@ def get_user_role(user, module_name=None):
     access = UserModuleAccess.objects.filter(user=user, is_active=True)
     if access.filter(role='super_admin').exists():
         return 'super_admin'
+    if access.filter(role='company_admin').exists():
+        return 'company_admin'
     if access.filter(role='module_admin').exists():
         return 'module_admin'
     if access.filter(role='regular_user').exists():

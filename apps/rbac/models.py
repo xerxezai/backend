@@ -33,6 +33,7 @@ class Module(models.Model):
 class UserModuleAccess(models.Model):
     ROLE_CHOICES = [
         ('super_admin', 'Super Admin'),
+        ('company_admin', 'Company Admin'),
         ('module_admin', 'Module Admin'),
         ('regular_user', 'Regular User'),
         ('read_only', 'Read Only'),
