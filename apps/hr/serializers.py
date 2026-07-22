@@ -57,11 +57,30 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
 class LeaveRequestSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source='employee.full_name', read_only=True)
-    decided_by_username = serializers.CharField(source='decided_by.username', read_only=True)
+    employee_code = serializers.CharField(source='employee.code', read_only=True)
+    decided_by_username = serializers.CharField(source='decided_by.username', read_only=True, default=None)
+    decided_by_name = serializers.SerializerMethodField()
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    type_display = serializers.CharField(source='get_type_display', read_only=True)
 
     class Meta:
         model = LeaveRequest
         fields = '__all__'
+        read_only_fields = ['days', 'status', 'decided_by', 'decided_at', 'rejection_reason']
+
+    def get_decided_by_name(self, obj):
+        if not obj.decided_by_id:
+            return None
+        return obj.decided_by.get_full_name() or obj.decided_by.username
+
+    def validate(self, attrs):
+        from_date = attrs.get('from_date') or getattr(self.instance, 'from_date', None)
+        to_date = attrs.get('to_date') or getattr(self.instance, 'to_date', None)
+        if from_date and to_date:
+            if to_date < from_date:
+                raise serializers.ValidationError({'to_date': 'To date must be on or after the from date.'})
+            attrs['days'] = (to_date - from_date).days + 1
+        return attrs
 
 
 class ShiftSerializer(serializers.ModelSerializer):

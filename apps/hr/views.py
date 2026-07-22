@@ -3,7 +3,7 @@ from datetime import date
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Sum
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, status, viewsets
@@ -14,6 +14,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from rest_framework.parsers import MultiPartParser, FormParser
 
+from apps.core.email import send_via_resend
 from apps.rbac.mixins import RBACScopedMixin
 from apps.companies.mixins import CompanyScopedMixin
 from .models import (Attendance, Department, Employee, LeaveRequest, PaySlip,
@@ -25,6 +26,73 @@ from .serializers import (AttendanceSerializer, DepartmentSerializer,
                           SalaryStructureSerializer, ShiftSerializer,
                           PerformanceReviewSerializer, EmployeeDocumentSerializer,
                           OnboardingChecklistSerializer, ExitManagementSerializer)
+
+# TEMPORARY: xerxez.com is not yet verified in Resend, so sends must use
+# Resend's shared onboarding@resend.dev sender until domain verification completes.
+FROM_EMAIL = 'onboarding@resend.dev'
+
+
+def _send_leave_decision_email(leave):
+    if not leave.employee.email:
+        return
+    approved = leave.status == 'approved'
+    subject = f"Your {leave.get_type_display()} leave request has been {leave.status}"
+    badge_bg, badge_color = ('#d1fae5', '#065f46') if approved else ('#fee2e2', '#991b1b')
+
+    plain = f"""
+Hi {leave.employee.full_name},
+
+Your {leave.get_type_display()} leave request from {leave.from_date} to {leave.to_date} ({leave.days} day(s)) has been {leave.status}.
+{f"Reason: {leave.rejection_reason}" if not approved and leave.rejection_reason else ""}
+
+— XERXEZ HR
+""".strip()
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8">
+<style>
+  body{{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;padding:0}}
+  .wrap{{max-width:560px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;
+         box-shadow:0 4px 32px rgba(0,0,0,.10)}}
+  .hdr{{background:linear-gradient(135deg,#1a1208 0%,#0f0a05 100%);padding:36px 44px;text-align:center}}
+  .hdr h1{{color:#C9883A;font-family:Georgia,serif;font-size:24px;margin:0 0 6px}}
+  .hdr p{{color:rgba(255,255,255,.42);font-size:13px;margin:0}}
+  .body{{padding:36px 44px}}
+  .badge{{display:inline-block;padding:5px 16px;border-radius:100px;font-size:11px;
+           font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:22px;
+           background:{badge_bg};color:{badge_color}}}
+  table{{width:100%;border-collapse:collapse}}
+  tr:nth-child(even) td{{background:#fafaf8}}
+  td{{padding:12px 14px;font-size:14px;color:#333;vertical-align:top;border-bottom:1px solid #f0ede8}}
+  td:first-child{{width:38%;font-weight:700;color:#5a5650;font-size:11px;text-transform:uppercase;letter-spacing:.09em}}
+  .msg{{background:#fafaf8;border-left:3px solid #ef4444;border-radius:0 8px 8px 0;
+        padding:18px 20px;margin-top:22px;font-size:14px;line-height:1.72;color:#333}}
+  .ftr{{background:#F8F7F4;border-top:1px solid #e8e4de;padding:18px 44px;
+        text-align:center;font-size:12px;color:#9b9690}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr"><h1>XERXEZ</h1><p>Leave Request Update</p></div>
+  <div class="body">
+    <span class="badge">{leave.get_status_display()}</span>
+    <table>
+      <tr><td>Employee</td>   <td>{leave.employee.full_name}</td></tr>
+      <tr><td>Leave Type</td> <td>{leave.get_type_display()}</td></tr>
+      <tr><td>From</td>       <td>{leave.from_date}</td></tr>
+      <tr><td>To</td>         <td>{leave.to_date}</td></tr>
+      <tr><td>Total Days</td> <td>{leave.days}</td></tr>
+    </table>
+    {f'<div class="msg"><strong>Reason for rejection:</strong><br>{leave.rejection_reason}</div>' if not approved and leave.rejection_reason else ''}
+  </div>
+  <div class="ftr">XERXEZ HR &nbsp;·&nbsp; xerxez.com</div>
+</div>
+</body>
+</html>"""
+
+    send_via_resend(to=leave.employee.email, subject=subject, html=html, text=plain, from_email=FROM_EMAIL)
+
 
 DEFAULT_ONBOARDING_TASKS = [
     'Email account created',
@@ -227,13 +295,32 @@ class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         return Response(list(buckets.values()))
 
 
+LEAVE_ANNUAL_ALLOWANCE = {
+    'annual': 21,
+    'sick': 12,
+    'emergency': 5,
+    # unpaid / maternity / paternity / other are uncapped — handled case-by-case, not a pooled allowance.
+}
+
+
 class LeaveRequestViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = LeaveRequest.objects.select_related('employee', 'decided_by').all()
     serializer_class = LeaveRequestSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['employee', 'status', 'type']
+    search_fields = ['employee__full_name', 'employee__code']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        date_from = self.request.query_params.get('date_from')
+        date_to = self.request.query_params.get('date_to')
+        if date_from:
+            qs = qs.filter(from_date__gte=date_from)
+        if date_to:
+            qs = qs.filter(to_date__lte=date_to)
+        return qs
 
     def perform_create(self, serializer):
         employee = serializer.validated_data.get('employee')
@@ -250,7 +337,9 @@ class LeaveRequestViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         leave.status = action_val
         leave.decided_by = request.user
         leave.decided_at = timezone.now()
+        leave.rejection_reason = request.data.get('rejection_reason', '') if action_val == 'rejected' else ''
         leave.save()
+        _send_leave_decision_email(leave)
         return Response(LeaveRequestSerializer(leave).data)
 
     @action(detail=False, methods=['get'], url_path='my-leaves')
@@ -261,6 +350,26 @@ class LeaveRequestViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
             return Response([])
         qs = LeaveRequest.objects.filter(employee=employee).order_by('-created_at')
         return Response(LeaveRequestSerializer(qs, many=True).data)
+
+    @action(detail=False, methods=['get'], url_path='balance')
+    def balance(self, request):
+        """GET /hr/leave-requests/balance/?employee=<id>&leave_type=<type> — this calendar
+        year's allowance/used/remaining for one employee + leave type, from approved requests."""
+        employee_id = request.query_params.get('employee')
+        leave_type = request.query_params.get('leave_type') or request.query_params.get('type')
+        if not employee_id or not leave_type:
+            return Response({'detail': 'employee and leave_type query params are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        year = timezone.now().year
+        used = LeaveRequest.objects.filter(
+            employee_id=employee_id, type=leave_type, status='approved', from_date__year=year,
+        ).aggregate(total=Sum('days'))['total'] or 0
+        used = float(used)
+
+        allowance = LEAVE_ANNUAL_ALLOWANCE.get(leave_type)
+        if allowance is None:
+            return Response({'leave_type': leave_type, 'unlimited': True, 'allowance': None, 'used': used, 'remaining': None})
+        return Response({'leave_type': leave_type, 'unlimited': False, 'allowance': allowance, 'used': used, 'remaining': max(allowance - used, 0)})
 
 
 class ShiftViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
