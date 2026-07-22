@@ -20,13 +20,15 @@ from apps.rbac.permissions import ReadOnlyOrHigher
 from apps.companies.mixins import CompanyScopedMixin
 from .models import (Attendance, Department, Employee, LeaveRequest, PaySlip,
                      Payroll, SalaryStructure, Shift,
-                     PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement)
+                     PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement,
+                     Holiday, Overtime)
 from .serializers import (AttendanceSerializer, DepartmentSerializer,
                           EmployeeSerializer, LeaveRequestSerializer,
                           PaySlipSerializer, PayrollSerializer,
                           SalaryStructureSerializer, ShiftSerializer,
                           PerformanceReviewSerializer, EmployeeDocumentSerializer,
-                          OnboardingChecklistSerializer, ExitManagementSerializer)
+                          OnboardingChecklistSerializer, ExitManagementSerializer,
+                          HolidaySerializer, OvertimeSerializer)
 
 # TEMPORARY: xerxez.com is not yet verified in Resend, so sends must use
 # Resend's shared onboarding@resend.dev sender until domain verification completes.
@@ -742,3 +744,72 @@ class ExitManagementViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
             rec.final_settlement_amount = amount
         rec.save()
         return Response(ExitManagementSerializer(rec).data)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# New: Holidays, Overtime
+# ─────────────────────────────────────────────────────────────────────────────
+
+class HolidayViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
+    queryset = Holiday.objects.all()
+    serializer_class = HolidaySerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    module_name = 'hr'
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['holiday_type']
+    ordering_fields = ['date']
+
+    @action(detail=False, methods=['get'], url_path='upcoming')
+    def upcoming(self, request):
+        """GET /hr/holidays/upcoming/?limit= — next N holidays from today, for the HR
+        Dashboard widget."""
+        limit = int(request.query_params.get('limit', 5))
+        qs = self.get_queryset().filter(date__gte=date.today()).order_by('date')[:limit]
+        return Response(HolidaySerializer(qs, many=True).data)
+
+
+class OvertimeViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
+    queryset = Overtime.objects.select_related('employee', 'approved_by').all()
+    serializer_class = OvertimeSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    module_name = 'hr'
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['employee', 'status', 'rate']
+    ordering_fields = ['date']
+
+    def perform_create(self, serializer):
+        employee = serializer.validated_data.get('employee')
+        serializer.save(company=employee.company if employee else None)
+
+    @action(detail=True, methods=['patch'], url_path='approve')
+    def approve(self, request, pk=None):
+        if not request.user.is_staff:
+            return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
+        overtime = self.get_object()
+        action_val = request.data.get('action', 'approved')
+        if action_val not in ('approved', 'rejected'):
+            return Response({'detail': 'action must be "approved" or "rejected".'}, status=status.HTTP_400_BAD_REQUEST)
+        overtime.status = action_val
+        overtime.approved_by = request.user
+        overtime.approved_at = timezone.now()
+        overtime.save()
+        return Response(OvertimeSerializer(overtime).data)
+
+    @action(detail=False, methods=['get'], url_path='by-employee')
+    def by_employee(self, request):
+        """GET /hr/overtime/by-employee/ — total approved overtime hours + cost per employee,
+        for the Overtime page's summary."""
+        totals: dict = {}
+        for ot in self.get_queryset().filter(status='approved'):
+            b = totals.setdefault(ot.employee_id, {
+                'employee_id': ot.employee_id, 'employee_name': ot.employee.full_name,
+                'total_hours': 0.0, 'total_cost': 0.0,
+            })
+            b['total_hours'] += float(ot.extra_hours or 0)
+            b['total_cost'] += OvertimeSerializer(ot).data['cost']
+        for b in totals.values():
+            b['total_hours'] = round(b['total_hours'], 2)
+            b['total_cost'] = round(b['total_cost'], 2)
+        return Response(list(totals.values()))

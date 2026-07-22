@@ -4,7 +4,8 @@ from .views import (AttendanceViewSet, DepartmentViewSet, EmployeeViewSet,
                     LeaveRequestViewSet, PaySlipViewSet, PayrollViewSet,
                     SalaryStructureViewSet, ShiftViewSet,
                     PerformanceReviewViewSet, EmployeeDocumentViewSet,
-                    OnboardingChecklistViewSet, ExitManagementViewSet)
+                    OnboardingChecklistViewSet, ExitManagementViewSet,
+                    HolidayViewSet, OvertimeViewSet)
 
 app_name = 'hr'
 router = DefaultRouter()
@@ -26,5 +27,9 @@ router.register('reviews', PerformanceReviewViewSet, basename='review')
 router.register('documents', EmployeeDocumentViewSet, basename='document')
 router.register('onboarding', OnboardingChecklistViewSet, basename='onboarding')
 router.register('exit', ExitManagementViewSet, basename='exit')
+
+# New: Holidays, Overtime
+router.register('holidays', HolidayViewSet, basename='holiday')
+router.register('overtime', OvertimeViewSet, basename='overtime')
 
 urlpatterns = router.urls

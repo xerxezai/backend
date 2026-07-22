@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
     Department, Employee, Attendance, LeaveRequest, Shift, SalaryStructure, Payroll, PaySlip,
-    PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement,
+    PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement, Holiday, Overtime,
 )
 
 
@@ -186,3 +186,29 @@ class ExitManagementSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExitManagement
         fields = '__all__'
+
+
+class HolidaySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Holiday
+        fields = '__all__'
+
+
+class OvertimeSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source='employee.full_name', read_only=True)
+    employee_code = serializers.CharField(source='employee.code', read_only=True)
+    approved_by_username = serializers.CharField(source='approved_by.username', read_only=True, default=None)
+    cost = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Overtime
+        fields = '__all__'
+        read_only_fields = ['status', 'approved_by', 'approved_at']
+
+    def get_cost(self, obj):
+        """Extra pay for this entry, in the employee's own salary currency — assumes a
+        26-day, 8-hour standard month (208 hours) to derive an hourly rate from salary."""
+        salary = float(obj.employee.salary or 0)
+        hourly = salary / 208 if salary else 0
+        multiplier = 2 if obj.rate == '2x' else 1.5
+        return round(hourly * multiplier * float(obj.extra_hours or 0), 2)

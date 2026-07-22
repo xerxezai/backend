@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from .models import (Attendance, Department, Employee, LeaveRequest, PaySlip,
-                     Payroll, SalaryStructure, Shift)
+                     Payroll, SalaryStructure, Shift, Holiday, Overtime)
 
 
 @admin.register(Department)
@@ -59,3 +59,18 @@ class PayrollAdmin(admin.ModelAdmin):
 class PaySlipAdmin(admin.ModelAdmin):
     list_display = ('payroll', 'pdf_ref', 'generated_at')
     search_fields = ('payroll__employee__full_name',)
+
+
+@admin.register(Holiday)
+class HolidayAdmin(admin.ModelAdmin):
+    list_display = ('name', 'date', 'holiday_type')
+    list_filter = ('holiday_type',)
+    search_fields = ('name',)
+
+
+@admin.register(Overtime)
+class OvertimeAdmin(admin.ModelAdmin):
+    list_display = ('employee', 'date', 'extra_hours', 'rate', 'status', 'approved_by')
+    list_filter = ('status', 'rate')
+    search_fields = ('employee__full_name', 'employee__code')
+    autocomplete_fields = ('employee', 'approved_by')

@@ -314,3 +314,57 @@ class ExitManagement(models.Model):
 
     def __str__(self):
         return f'{self.employee} — {self.get_reason_display()}'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# New: Holidays, Overtime — everything else in this file already existed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Holiday(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
+    TYPE_CHOICES = [
+        ('public', 'Public'),
+        ('company', 'Company'),
+        ('optional', 'Optional'),
+    ]
+    name = models.CharField(max_length=255)
+    date = models.DateField()
+    holiday_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='public')
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'hr_holiday'
+        ordering = ['date']
+
+    def __str__(self):
+        return f'{self.name} — {self.date}'
+
+
+class Overtime(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
+    RATE_CHOICES = [('1.5x', '1.5x'), ('2x', '2x')]
+    STATUS_CHOICES = [('pending', 'Pending'), ('approved', 'Approved'), ('rejected', 'Rejected')]
+
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='overtime_entries')
+    date = models.DateField()
+    extra_hours = models.DecimalField(max_digits=5, decimal_places=2)
+    reason = models.TextField()
+    rate = models.CharField(max_length=10, choices=RATE_CHOICES, default='1.5x')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='approved_overtime')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'hr_overtime'
+        ordering = ['-date']
+
+    def __str__(self):
+        return f'{self.employee} — {self.date} ({self.extra_hours}h)'
