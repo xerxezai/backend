@@ -1668,6 +1668,10 @@ class ExitManagementViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='recalculate')
     def recalculate(self, request, pk=None):
+        """Refreshes the settlement breakdown, and — for a record created before this
+        side-effect existed, or one that otherwise fell out of sync — re-applies the
+        employee-status transition too, so a stale legacy exit can be brought fully
+        up to date without deleting and recreating it."""
         self._require_privileged()
         rec = self.get_object()
         if rec.settlement_paid:
@@ -1676,6 +1680,9 @@ class ExitManagementViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         for field, value in breakdown.items():
             setattr(rec, field, value)
         rec.save()
+        if not rec.completed_at and rec.employee.status not in ('serving_notice', 'resigned', 'terminated'):
+            rec.employee.status = 'serving_notice'
+            rec.employee.save(update_fields=['status'])
         return Response(ExitManagementSerializer(rec, context={'request': request}).data)
 
     @action(detail=True, methods=['patch'], url_path='mark-interview-done')
