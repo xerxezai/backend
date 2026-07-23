@@ -351,8 +351,20 @@ class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='my-week-stats')
     def my_week_stats(self, request):
         """GET /hr/attendance/my-week-stats/ — this Mon-through-today's present/late/half_day/
-        absent counts + total hours for the logged-in employee. A weekday with no Attendance
-        row and no explicit 'absent' row still counts as absent — see Attendance.status docs."""
+        absent counts + total hours for the logged-in employee.
+
+        Classification is driven by actual check_in/check_out/hours, not the stored `status`
+        field (which can be set by "Add Manual Attendance" independently of real hours worked):
+          - No check_in at all for a workday -> absent. A day the employee clocked into (even
+            if not yet clocked out, e.g. today) is never counted as absent.
+          - Clocked in but not yet clocked out -> not classified into any bucket yet (shift
+            still in progress).
+          - Clocked in and out, arrival after the late threshold -> late.
+          - Clocked in and out, > 6 hours -> present.
+          - Clocked in and out, 3-6 hours (inclusive) -> half_day.
+          - Clocked in and out, < 3 hours -> not bucketed (too short to call present/half_day,
+            but still not absent since they did show up).
+        """
         employee = self._get_employee(request)
         if not employee:
             return Response({'present': 0, 'late': 0, 'half_day': 0, 'absent': 0, 'hours': 0})
@@ -366,16 +378,19 @@ class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         hours = 0.0
         for d in workdays:
             att = records.get(d)
-            if not att or att.status == 'absent':
+            if not att or not att.check_in:
                 absent += 1
                 continue
-            hours += float(att.hours or 0)
+            if not att.check_out:
+                continue
+            day_hours = float(att.hours or 0)
+            hours += day_hours
             if att.status == 'late':
                 late += 1
-            elif att.status == 'half_day':
-                half_day += 1
-            else:
+            elif day_hours > 6:
                 present += 1
+            elif 3 <= day_hours <= 6:
+                half_day += 1
         return Response({'present': present, 'late': late, 'half_day': half_day, 'absent': absent, 'hours': round(hours, 2)})
 
     @action(detail=False, methods=['get'], url_path='my-month-summary')
