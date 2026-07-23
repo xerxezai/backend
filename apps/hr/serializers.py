@@ -199,12 +199,16 @@ class PerformanceReviewSerializer(serializers.ModelSerializer):
 class EmployeeDocumentSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source='employee.full_name', read_only=True)
     doc_type_label = serializers.CharField(source='get_doc_type_display', read_only=True)
+    uploaded_by_username = serializers.CharField(source='uploaded_by.username', read_only=True, default=None)
     file_url = serializers.SerializerMethodField()
+    days_until_expiry = serializers.SerializerMethodField()
+    is_expired = serializers.SerializerMethodField()
+    expiry_status = serializers.SerializerMethodField()
 
     class Meta:
         model = EmployeeDocument
         fields = '__all__'
-        read_only_fields = ['employee', 'uploaded_at']
+        read_only_fields = ['employee', 'uploaded_at', 'uploaded_by', 'expiry_notified']
 
     def get_file_url(self, obj):
         if not obj.file:
@@ -212,6 +216,24 @@ class EmployeeDocumentSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         url = obj.file.url
         return request.build_absolute_uri(url) if request else url
+
+    def get_days_until_expiry(self, obj):
+        if not obj.expiry_date:
+            return None
+        return (obj.expiry_date - date.today()).days
+
+    def get_is_expired(self, obj):
+        return bool(obj.expiry_date and obj.expiry_date < date.today())
+
+    def get_expiry_status(self, obj):
+        if not obj.expiry_date:
+            return 'valid'
+        days = (obj.expiry_date - date.today()).days
+        if days < 0:
+            return 'expired'
+        if days <= 30:
+            return 'expiring_soon'
+        return 'valid'
 
 
 class OnboardingChecklistSerializer(serializers.ModelSerializer):

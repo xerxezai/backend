@@ -98,6 +98,77 @@ Your {leave.get_type_display()} leave request from {leave.from_date} to {leave.t
     send_via_resend(to=leave.employee.email, subject=subject, html=html, text=plain, from_email=FROM_EMAIL)
 
 
+DOCUMENT_EXPIRY_NOTIFY_EMAIL = 'xerxez.in@gmail.com'
+
+
+def _send_document_expiring_email(document):
+    days = (document.expiry_date - date.today()).days
+    subject = f"Document Expiring Soon — {document.employee.full_name} — {document.get_doc_type_display()}"
+
+    plain = f"""
+Document {document.name} for employee {document.employee.full_name} expires on {document.expiry_date.strftime('%d %b %Y')} — {days} day(s) remaining.
+
+— XERXEZ HR
+""".strip()
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8">
+<style>
+  body{{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;padding:0}}
+  .wrap{{max-width:560px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;
+         box-shadow:0 4px 32px rgba(0,0,0,.10)}}
+  .hdr{{background:linear-gradient(135deg,#1a1208 0%,#0f0a05 100%);padding:36px 44px;text-align:center}}
+  .hdr h1{{color:#C9883A;font-family:Georgia,serif;font-size:24px;margin:0 0 6px}}
+  .hdr p{{color:rgba(255,255,255,.42);font-size:13px;margin:0}}
+  .body{{padding:36px 44px}}
+  .badge{{display:inline-block;padding:5px 16px;border-radius:100px;font-size:11px;
+           font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:22px;
+           background:#fef3c7;color:#92400e}}
+  table{{width:100%;border-collapse:collapse}}
+  tr:nth-child(even) td{{background:#fafaf8}}
+  td{{padding:12px 14px;font-size:14px;color:#333;vertical-align:top;border-bottom:1px solid #f0ede8}}
+  td:first-child{{width:38%;font-weight:700;color:#5a5650;font-size:11px;text-transform:uppercase;letter-spacing:.09em}}
+  .ftr{{background:#F8F7F4;border-top:1px solid #e8e4de;padding:18px 44px;
+        text-align:center;font-size:12px;color:#9b9690}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr"><h1>XERXEZ</h1><p>Document Expiry Alert</p></div>
+  <div class="body">
+    <span class="badge">Expiring in {days} day(s)</span>
+    <table>
+      <tr><td>Employee</td>      <td>{document.employee.full_name}</td></tr>
+      <tr><td>Document</td>      <td>{document.name}</td></tr>
+      <tr><td>Type</td>          <td>{document.get_doc_type_display()}</td></tr>
+      <tr><td>Expiry Date</td>   <td>{document.expiry_date.strftime('%d %b %Y')}</td></tr>
+    </table>
+  </div>
+  <div class="ftr">XERXEZ HR &nbsp;·&nbsp; xerxez.com</div>
+</div>
+</body>
+</html>"""
+
+    send_via_resend(to=DOCUMENT_EXPIRY_NOTIFY_EMAIL, subject=subject, html=html, text=plain, from_email=FROM_EMAIL)
+
+
+def _maybe_notify_document_expiring(document):
+    """Sends the 'expiring in 30 days' alert the moment a document is saved with an expiry
+    date that already falls inside that window (covers uploading/editing a document that's
+    already close to expiry). `expiry_notified` prevents re-sending on every later edit.
+    A document that drifts into the 30-day window purely by the calendar moving forward
+    (nobody re-saves it) needs a scheduled check instead — see the check_expiring_documents
+    management command."""
+    if document.expiry_notified or not document.expiry_date:
+        return
+    days = (document.expiry_date - date.today()).days
+    if 0 <= days <= 30:
+        _send_document_expiring_email(document)
+        document.expiry_notified = True
+        document.save(update_fields=['expiry_notified'])
+
+
 def _is_hr_privileged(user):
     """Super Admin / Admin (Django is_staff or is_superuser) / Company Admin / HR Manager
     (RBAC module_admin scoped to the 'hr' module) — the roles that see and manage every
@@ -293,10 +364,13 @@ class EmployeeViewSet(RBACScopedMixin, viewsets.ModelViewSet):
     def documents(self, request, pk=None):
         employee = self.get_object()
         if request.method == 'POST':
+            if not _is_hr_privileged(request.user):
+                return Response({'detail': 'Only Company Admin or HR Manager can upload documents.'}, status=status.HTTP_403_FORBIDDEN)
             ser = EmployeeDocumentSerializer(data=request.data, context={'request': request})
             ser.is_valid(raise_exception=True)
-            ser.save(employee=employee, company=employee.company)
-            return Response(ser.data, status=status.HTTP_201_CREATED)
+            doc = ser.save(employee=employee, company=employee.company, uploaded_by=request.user)
+            _maybe_notify_document_expiring(doc)
+            return Response(EmployeeDocumentSerializer(doc, context={'request': request}).data, status=status.HTTP_201_CREATED)
         qs = employee.documents.all()
         return Response(EmployeeDocumentSerializer(qs, many=True, context={'request': request}).data)
 
@@ -1079,7 +1153,7 @@ class PerformanceReviewViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
 
 
 class EmployeeDocumentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
-    queryset = EmployeeDocument.objects.select_related('employee').all()
+    queryset = EmployeeDocument.objects.select_related('employee', 'uploaded_by').all()
     serializer_class = EmployeeDocumentSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
@@ -1087,6 +1161,63 @@ class EmployeeDocumentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     parser_classes = [MultiPartParser, FormParser]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee', 'doc_type']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            return qs.filter(employee=employee) if employee else qs.none()
+        return qs
+
+    def perform_update(self, serializer):
+        if not _is_hr_privileged(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only Company Admin or HR Manager can edit documents.')
+        old_expiry = serializer.instance.expiry_date
+        instance = serializer.save()
+        if instance.expiry_date != old_expiry:
+            instance.expiry_notified = False
+            instance.save(update_fields=['expiry_notified'])
+        _maybe_notify_document_expiring(instance)
+
+    def perform_destroy(self, instance):
+        if not _is_super_or_company_admin(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only Admin can delete documents.')
+        super().perform_destroy(instance)
+
+    @action(detail=True, methods=['patch'], url_path='verify')
+    def verify(self, request, pk=None):
+        if not _is_hr_privileged(request.user):
+            return Response({'detail': 'Only Company Admin or HR Manager can verify documents.'}, status=status.HTTP_403_FORBIDDEN)
+        doc = self.get_object()
+        doc.is_verified = True
+        doc.save(update_fields=['is_verified'])
+        return Response(EmployeeDocumentSerializer(doc, context={'request': request}).data)
+
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        qs = self.get_queryset()
+        today = date.today()
+        window_end = today + timedelta(days=30)
+        return Response({
+            'total': qs.count(),
+            'expiring_soon': qs.filter(expiry_date__gte=today, expiry_date__lte=window_end).count(),
+            'expired': qs.filter(expiry_date__lt=today).count(),
+            'verified': qs.filter(is_verified=True).count(),
+        })
+
+    @action(detail=False, methods=['get'], url_path='expiring')
+    def expiring(self, request):
+        """GET /hr/documents/expiring/ — every document expiring within 30 days across all
+        employees, for the 'Documents Expiring Soon' banner. Admin/HR Manager only — a
+        regular employee's queryset above is already scoped to just their own documents."""
+        if not _is_hr_privileged(request.user):
+            return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
+        today = date.today()
+        window_end = today + timedelta(days=30)
+        qs = self.get_queryset().filter(expiry_date__gte=today, expiry_date__lte=window_end).order_by('expiry_date')
+        return Response(EmployeeDocumentSerializer(qs, many=True, context={'request': request}).data)
 
 
 class OnboardingChecklistViewSet(CompanyScopedMixin, viewsets.ModelViewSet):

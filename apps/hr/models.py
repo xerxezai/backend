@@ -306,14 +306,39 @@ class EmployeeDocument(models.Model):
         'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
         related_name='%(app_label)s_%(class)s',
     )
+    # Old values (id_proof/contract/certificate) stay valid on already-stored rows even
+    # though they're no longer offered in the dropdown — Django only validates `choices`
+    # on serializer/form input, not on read, so nothing breaks for existing documents.
     DOC_TYPE_CHOICES = [
-        ('offer_letter', 'Offer Letter'), ('id_proof', 'ID Proof'),
-        ('contract', 'Contract'), ('certificate', 'Certificate'), ('other', 'Other'),
+        ('passport', 'Passport'),
+        ('emirates_id', 'Emirates ID'),
+        ('aadhar_card', 'Aadhar Card'),
+        ('visa', 'Visa'),
+        ('employment_contract', 'Employment Contract'),
+        ('offer_letter', 'Offer Letter'),
+        ('experience_certificate', 'Experience Certificate'),
+        ('educational_certificate', 'Educational Certificate'),
+        ('medical_certificate', 'Medical Certificate'),
+        ('insurance', 'Insurance Document'),
+        ('nda', 'NDA'),
+        ('other', 'Other'),
     ]
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='documents')
-    doc_type = models.CharField(max_length=20, choices=DOC_TYPE_CHOICES)
+    doc_type = models.CharField(max_length=30, choices=DOC_TYPE_CHOICES)
     name = models.CharField(max_length=200)
-    file = models.FileField(upload_to='hr/documents/')
+    file = models.FileField(upload_to='employee_documents/')
+    document_number = models.CharField(max_length=100, blank=True, help_text='Passport number, visa number, etc.')
+    issue_date = models.DateField(null=True, blank=True)
+    expiry_date = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    is_verified = models.BooleanField(default=False)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='uploaded_hr_documents',
+    )
+    # Not part of the original spec — tracks whether the "expiring in 30 days" email (see
+    # apps.hr.views._send_document_expiring_email) has already gone out for this document,
+    # so re-saving it (e.g. an admin editing notes) doesn't re-send the same alert.
+    expiry_notified = models.BooleanField(default=False)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
