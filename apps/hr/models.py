@@ -349,7 +349,7 @@ class Overtime(models.Model):
         'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
         related_name='%(app_label)s_%(class)s',
     )
-    RATE_CHOICES = [('1.5x', '1.5x'), ('2x', '2x')]
+    RATE_CHOICES = [('1.5x', '1.5x'), ('2x', '2x'), ('2.5x', '2.5x')]
     STATUS_CHOICES = [('pending', 'Pending'), ('approved', 'Approved'), ('rejected', 'Rejected')]
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='overtime_entries')
@@ -360,6 +360,7 @@ class Overtime(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='approved_overtime')
     approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

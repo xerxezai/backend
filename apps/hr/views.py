@@ -1048,6 +1048,7 @@ class OvertimeViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         overtime.status = action_val
         overtime.approved_by = request.user
         overtime.approved_at = timezone.now()
+        overtime.rejection_reason = request.data.get('rejection_reason', '') if action_val == 'rejected' else ''
         overtime.save()
         return Response(OvertimeSerializer(overtime).data)
 
