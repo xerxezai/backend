@@ -357,6 +357,10 @@ class Overtime(models.Model):
     extra_hours = models.DecimalField(max_digits=5, decimal_places=2)
     reason = models.TextField()
     rate = models.CharField(max_length=10, choices=RATE_CHOICES, default='1.5x')
+    amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0,
+        help_text='Overtime payment amount, entered manually by the admin (not auto-calculated).',
+    )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='approved_overtime')
     approved_at = models.DateTimeField(null=True, blank=True)

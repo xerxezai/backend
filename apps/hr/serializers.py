@@ -207,17 +207,8 @@ class OvertimeSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source='employee.full_name', read_only=True)
     employee_code = serializers.CharField(source='employee.code', read_only=True)
     approved_by_username = serializers.CharField(source='approved_by.username', read_only=True, default=None)
-    cost = serializers.SerializerMethodField()
 
     class Meta:
         model = Overtime
         fields = '__all__'
         read_only_fields = ['status', 'approved_by', 'approved_at', 'rejection_reason']
-
-    def get_cost(self, obj):
-        """Extra pay for this entry, in the employee's own salary currency — assumes a
-        26-day, 8-hour standard month (208 hours) to derive an hourly rate from salary."""
-        salary = float(obj.employee.salary or 0)
-        hourly = salary / 208 if salary else 0
-        multiplier = {'1.5x': 1.5, '2x': 2, '2.5x': 2.5}.get(obj.rate, 1.5)
-        return round(hourly * multiplier * float(obj.extra_hours or 0), 2)

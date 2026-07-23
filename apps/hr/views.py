@@ -1063,7 +1063,7 @@ class OvertimeViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
                 'total_hours': 0.0, 'total_cost': 0.0,
             })
             b['total_hours'] += float(ot.extra_hours or 0)
-            b['total_cost'] += OvertimeSerializer(ot).data['cost']
+            b['total_cost'] += float(ot.amount or 0)
         for b in totals.values():
             b['total_hours'] = round(b['total_hours'], 2)
             b['total_cost'] = round(b['total_cost'], 2)
