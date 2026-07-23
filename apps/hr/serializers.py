@@ -1,3 +1,4 @@
+from datetime import datetime, date, timedelta
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 from .models import (
@@ -118,13 +119,36 @@ class ShiftSerializer(serializers.ModelSerializer):
         source='employees', queryset=Employee.objects.all(), many=True, required=False,
     )
     employee_names = serializers.SerializerMethodField()
+    employee_count = serializers.SerializerMethodField()
+    employees_detail = serializers.SerializerMethodField()
+    total_hours = serializers.SerializerMethodField()
 
     class Meta:
         model = Shift
-        fields = ['id', 'name', 'start_time', 'end_time', 'employee_ids', 'employee_names']
+        fields = [
+            'id', 'name', 'shift_type', 'start_time', 'end_time', 'break_duration', 'grace_period',
+            'working_days', 'color', 'is_active', 'created_at',
+            'employee_ids', 'employee_names', 'employee_count', 'employees_detail', 'total_hours',
+        ]
 
     def get_employee_names(self, obj):
         return [e.full_name for e in obj.employees.all()]
+
+    def get_employee_count(self, obj):
+        return obj.employees.count()
+
+    def get_employees_detail(self, obj):
+        return [{'id': e.id, 'full_name': e.full_name, 'code': e.code} for e in obj.employees.all()]
+
+    def get_total_hours(self, obj):
+        if not obj.start_time or not obj.end_time:
+            return 0
+        start = datetime.combine(date.min, obj.start_time)
+        end = datetime.combine(date.min, obj.end_time)
+        if end <= start:
+            end += timedelta(days=1)
+        minutes = (end - start).total_seconds() / 60 - (obj.break_duration or 0)
+        return round(max(minutes, 0) / 60, 2)
 
 
 class SalaryStructureSerializer(serializers.ModelSerializer):

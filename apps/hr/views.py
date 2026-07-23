@@ -752,8 +752,34 @@ class ShiftViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Shift.objects.prefetch_related('employees').all()
     serializer_class = ShiftSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    permission_classes = [IsAuthenticated]
     module_name = 'hr'
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['shift_type', 'is_active']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            return qs.filter(employees=employee) if employee else qs.none()
+        return qs
+
+    def _require_privileged(self):
+        if not _is_hr_privileged(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only Company Admin or HR Manager can manage shifts.')
+
+    def perform_create(self, serializer):
+        self._require_privileged()
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._require_privileged()
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._require_privileged()
+        super().perform_destroy(instance)
 
 
 class SalaryStructureViewSet(CompanyScopedMixin, viewsets.ModelViewSet):

@@ -184,10 +184,26 @@ class Shift(models.Model):
         'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
         related_name='%(app_label)s_%(class)s',
     )
+    SHIFT_TYPES = [
+        ('Morning', 'Morning'),
+        ('Evening', 'Evening'),
+        ('Night', 'Night'),
+        ('Rotational', 'Rotational'),
+    ]
     name = models.CharField(max_length=100)
+    shift_type = models.CharField(max_length=20, choices=SHIFT_TYPES, default='Morning')
     start_time = models.TimeField()
     end_time = models.TimeField()
+    break_duration = models.IntegerField(default=30, help_text='Break duration in minutes')
+    grace_period = models.IntegerField(default=10, help_text='Minutes late allowed before marked late')
+    working_days = models.JSONField(default=list, blank=True, help_text="e.g. ['Monday', 'Tuesday', ...]")
+    color = models.CharField(max_length=20, default='#c8a84b')
+    is_active = models.BooleanField(default=True)
     employees = models.ManyToManyField(Employee, blank=True, related_name='shifts')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
 
     def __str__(self):
         return self.name
