@@ -820,6 +820,80 @@ class PayrollViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
             return qs.filter(employee=employee) if employee else qs.none()
         return qs
 
+    @action(detail=False, methods=['get'], url_path='preview')
+    def preview(self, request):
+        """GET /hr/payroll/preview/?month=&year= — read-only dry run of what `generate` would
+        produce, for the Generate Payroll tab's confirmation table. Computes the same
+        basic/allowances/deductions/gross/net as `generate` (from each employee's
+        SalaryStructure + Attendance), plus an informational `leave_days` count (approved
+        LeaveRequest days overlapping the month) that `generate` itself doesn't use. Never
+        writes to the database."""
+        if not _is_hr_privileged(request.user):
+            return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
+
+        month = request.query_params.get('month')
+        year = request.query_params.get('year')
+        if not month or not year:
+            return Response({'detail': 'month and year are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        month, year = int(month), int(year)
+        _, working_days = calendar.monthrange(year, month)
+        month_start = date(year, month, 1)
+        month_end = date(year, month, working_days)
+
+        company, is_platform_admin = self._company_context()
+        employees_qs = Employee.objects.filter(status='active')
+        if company:
+            employees_qs = employees_qs.filter(company=company)
+        elif not is_platform_admin:
+            employees_qs = employees_qs.none()
+        employees_qs = employees_qs.select_related('salary_structure', 'department')
+
+        rows = []
+        total_net = 0
+        for emp in employees_qs:
+            try:
+                ss = emp.salary_structure
+            except SalaryStructure.DoesNotExist:
+                continue
+
+            present_days = Attendance.objects.filter(
+                employee=emp, date__range=(month_start, month_end), status__in=['present', 'late'],
+            ).count()
+            half_days = Attendance.objects.filter(
+                employee=emp, date__range=(month_start, month_end), status='half_day',
+            ).count()
+            leave_days = LeaveRequest.objects.filter(
+                employee=emp, status='approved', from_date__lte=month_end, to_date__gte=month_start,
+            ).aggregate(total=Sum('days'))['total'] or 0
+
+            effective_days = present_days + (half_days * 0.5)
+            daily_rate = float(ss.basic_salary) / working_days if working_days else 0
+            basic_earned = round(daily_rate * effective_days, 2)
+            total_allowances = sum(float(v) for v in ss.allowances.values())
+            total_deductions = sum(float(v) for v in ss.deductions.values())
+            gross = basic_earned + total_allowances
+            net = gross - total_deductions
+            total_net += net
+
+            rows.append({
+                'employee_id': emp.id,
+                'employee_name': emp.full_name,
+                'employee_code': emp.code,
+                'department_name': emp.department.name if emp.department else None,
+                'basic_salary': ss.basic_salary,
+                'basic_earned': basic_earned,
+                'allowances': total_allowances,
+                'deductions': total_deductions,
+                'gross': round(gross, 2),
+                'net_salary': round(net, 2),
+                'working_days': working_days,
+                'present_days': present_days,
+                'half_days': half_days,
+                'leave_days': float(leave_days),
+            })
+
+        return Response({'employees': rows, 'count': len(rows), 'total_net': round(total_net, 2)})
+
     @action(detail=False, methods=['post'], url_path='generate')
     def generate(self, request):
         if not _is_hr_privileged(request.user):

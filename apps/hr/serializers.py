@@ -163,6 +163,9 @@ class SalaryStructureSerializer(serializers.ModelSerializer):
 class PayrollSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source='employee.full_name', read_only=True)
     employee_code = serializers.CharField(source='employee.code', read_only=True)
+    employee_designation = serializers.CharField(source='employee.designation', read_only=True, default='')
+    department_name = serializers.CharField(source='employee.department.name', read_only=True, default=None)
+    company_name = serializers.CharField(source='employee.company.name', read_only=True, default=None)
     generated_by_username = serializers.CharField(source='generated_by.username', read_only=True)
     has_payslip = serializers.SerializerMethodField()
 
