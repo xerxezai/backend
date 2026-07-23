@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 from .models import (
     Department, Employee, Attendance, LeaveRequest, Shift, SalaryStructure, Payroll, PaySlip,
     PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement, Holiday, Overtime,
@@ -15,7 +16,11 @@ def _gen_code(model, prefix, pad=3):
 
 
 class DepartmentSerializer(serializers.ModelSerializer):
-    code = serializers.CharField(required=False, allow_blank=True)
+    # Explicitly declared (for allow_blank, since it's auto-generated when omitted) — but that
+    # means ModelSerializer's automatic UniqueValidator is NOT applied for a manually-declared
+    # field, so it has to be added back here, or a collision only surfaces as an unhandled
+    # IntegrityError at the database insert instead of a clean 400.
+    code = serializers.CharField(required=False, allow_blank=True, validators=[UniqueValidator(queryset=Department.objects.all())])
     manager_username = serializers.CharField(source='manager.username', read_only=True, default=None)
     head_name = serializers.CharField(source='head.full_name', read_only=True, default=None)
     head_code = serializers.CharField(source='head.code', read_only=True, default=None)
@@ -32,7 +37,11 @@ class DepartmentSerializer(serializers.ModelSerializer):
 
 
 class EmployeeSerializer(serializers.ModelSerializer):
-    code = serializers.CharField(required=False, allow_blank=True)
+    # Same reasoning as DepartmentSerializer.code above — this manually-declared field needs
+    # its UniqueValidator added back explicitly, otherwise a code collision (e.g. two near-
+    # simultaneous creates racing _gen_code(), or a client submitting an explicit duplicate
+    # code) is an unhandled IntegrityError -> 500 instead of a clean 400.
+    code = serializers.CharField(required=False, allow_blank=True, validators=[UniqueValidator(queryset=Employee.objects.all())])
     department_name = serializers.CharField(source='department.name', read_only=True)
     user_username = serializers.CharField(source='user.username', read_only=True)
 

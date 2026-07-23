@@ -2,7 +2,7 @@ import calendar
 from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.db.models import Count, Sum
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
@@ -186,9 +186,33 @@ class EmployeeViewSet(RBACScopedMixin, viewsets.ModelViewSet):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied('Admin only.')
 
+    @staticmethod
+    def _raise_friendly_integrity_error(exc):
+        # Belt-and-suspenders on top of the serializer's UniqueValidator on `code` (see
+        # EmployeeSerializer) — a genuine race between two near-simultaneous saves (e.g. a
+        # double-click on Save, or two admins saving at once) can still slip past that
+        # pre-check and only fail at the DB insert. Never let that reach the client as a raw
+        # 500 — translate it into the same clean validation-error shape as everything else.
+        from rest_framework.exceptions import ValidationError
+        msg = str(exc).lower()
+        if 'hr_employee_code_key' in msg or ('unique' in msg and 'code' in msg):
+            raise ValidationError({'code': 'An employee with this code already exists — please try saving again.'})
+        if 'user_id' in msg or ('unique' in msg and 'user' in msg):
+            raise ValidationError({'user': 'This user account is already linked to an employee profile.'})
+        raise ValidationError({'detail': 'Could not save this employee — a record with matching details already exists.'})
+
     def perform_create(self, serializer):
         self._require_privileged()
-        super().perform_create(serializer)
+        try:
+            super().perform_create(serializer)
+        except IntegrityError as exc:
+            self._raise_friendly_integrity_error(exc)
+
+    def perform_update(self, serializer):
+        try:
+            super().perform_update(serializer)
+        except IntegrityError as exc:
+            self._raise_friendly_integrity_error(exc)
 
     def perform_destroy(self, instance):
         self._require_privileged()
