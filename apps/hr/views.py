@@ -126,11 +126,11 @@ def _is_hr_privileged(user):
     return get_user_role(user, 'hr') in ('super_admin', 'module_admin')
 
 
-def _can_delete_overtime(user):
-    """Deleting an overtime entry is a stricter bar than everything else _is_hr_privileged
-    gates: Super Admin / Company Admin only. HR Manager (module_admin on 'hr') can approve
-    and reject overtime but not delete it — deliberately excluded here, unlike
-    _is_hr_privileged. Regular employees can't delete at all."""
+def _is_super_or_company_admin(user):
+    """Stricter bar than _is_hr_privileged: Super Admin / Company Admin only, excluding HR
+    Manager (module_admin on 'hr'). Used to gate deleting HR records (overtime entries, leave
+    requests) — HR Manager can approve/reject those but not delete them; regular employees
+    can't delete at all."""
     if user.is_staff or user.is_superuser:
         return True
     return get_user_role(user) == 'company_admin'
@@ -648,6 +648,12 @@ class LeaveRequestViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
                 raise PermissionDenied('No employee profile linked to your account.')
         serializer.save(employee=employee, company=employee.company if employee else None)
 
+    def perform_destroy(self, instance):
+        if not _is_super_or_company_admin(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only Super Admin or Company Admin can delete leave requests.')
+        super().perform_destroy(instance)
+
     @action(detail=True, methods=['patch'], url_path='approve')
     def approve(self, request, pk=None):
         if not _is_hr_privileged(request.user):
@@ -1083,7 +1089,7 @@ class OvertimeViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         serializer.save(employee=employee, company=employee.company if employee else None)
 
     def perform_destroy(self, instance):
-        if not _can_delete_overtime(self.request.user):
+        if not _is_super_or_company_admin(self.request.user):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied('Only Super Admin or Company Admin can delete overtime entries.')
         super().perform_destroy(instance)
