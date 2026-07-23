@@ -151,6 +151,35 @@ class EmployeeViewSet(RBACScopedMixin, viewsets.ModelViewSet):
     search_fields = ['full_name', 'email', 'code']
     filterset_fields = ['department', 'status']
 
+    def get_queryset(self):
+        # Bespoke override instead of RBACScopedMixin's default rbac_scope(): that scopes
+        # module_admin/regular_user/read_only down to rows they personally *created*
+        # (rbac_user_field='created_by'), which doesn't fit Employee — a regular employee
+        # didn't create their own Employee record (an admin did), so the default would leave
+        # them seeing nobody, including themselves. Regular users get their own record only
+        # (via the `user` link); Super Admin/Company Admin/HR Manager keep full company-wide
+        # visibility, same tenant boundary RBACScopedMixin would have applied.
+        from apps.companies.utils import resolve_company, get_company_queryset
+        qs = self.queryset.all()
+        company, is_platform_admin = resolve_company(self.request)
+        qs = get_company_queryset(qs, company, is_platform_admin, 'company')
+        if is_platform_admin or _is_hr_privileged(self.request.user):
+            return qs
+        return qs.filter(user=self.request.user)
+
+    def _require_privileged(self):
+        if not _is_hr_privileged(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Admin only.')
+
+    def perform_create(self, serializer):
+        self._require_privileged()
+        super().perform_create(serializer)
+
+    def perform_destroy(self, instance):
+        self._require_privileged()
+        super().perform_destroy(instance)
+
     @action(detail=False, methods=['get'], url_path='me')
     def me(self, request):
         """GET /hr/employees/me/ — the caller's own Employee record, resolved directly from
@@ -790,9 +819,32 @@ class PerformanceReviewViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee', 'rating']
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            return qs.filter(employee=employee) if employee else qs.none()
+        return qs
+
+    def _require_privileged(self):
+        # A review is authored ABOUT an employee by a reviewer — an employee reviewing
+        # themselves (create/edit/delete their own review) isn't a real workflow here.
+        if not _is_hr_privileged(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Admin only.')
+
     def perform_create(self, serializer):
+        self._require_privileged()
         employee = serializer.validated_data.get('employee')
         serializer.save(reviewer=self.request.user, company=employee.company if employee else None)
+
+    def perform_update(self, serializer):
+        self._require_privileged()
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._require_privileged()
+        super().perform_destroy(instance)
 
 
 class EmployeeDocumentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
