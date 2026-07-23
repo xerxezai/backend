@@ -3,7 +3,8 @@ from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 from .models import (
     Department, Employee, Attendance, LeaveRequest, LeavePolicy, Shift, SalaryStructure, Payroll, PaySlip,
-    PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement, Holiday, Overtime,
+    PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement, ExitInterview, ExitChecklistItem,
+    Holiday, Overtime,
 )
 
 
@@ -259,11 +260,67 @@ class OnboardingChecklistSerializer(serializers.ModelSerializer):
 class ExitManagementSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source='employee.full_name', read_only=True)
     employee_code = serializers.CharField(source='employee.code', read_only=True)
+    department_name = serializers.CharField(source='employee.department.name', read_only=True, default=None)
     reason_label = serializers.CharField(source='get_reason_display', read_only=True)
+    settlement_payment_mode_label = serializers.CharField(source='get_settlement_payment_mode_display', read_only=True, default='')
+    notice_days_remaining = serializers.SerializerMethodField()
+    notice_period_progress_pct = serializers.SerializerMethodField()
+    overall_status = serializers.SerializerMethodField()
+    has_interview = serializers.SerializerMethodField()
 
     class Meta:
         model = ExitManagement
         fields = '__all__'
+        read_only_fields = [
+            'notice_period_start_date', 'pending_leaves', 'leave_encashment_amount',
+            'gratuity_amount', 'pending_salary_days', 'pending_salary_amount', 'deductions_amount',
+            'final_settlement_amount', 'settlement_paid', 'settlement_paid_date',
+            'settlement_payment_mode', 'settlement_reference_number', 'exit_interview_done',
+            'notice_reminder_sent', 'completed_at',
+        ]
+
+    def get_notice_days_remaining(self, obj):
+        return (obj.last_working_day - date.today()).days
+
+    def get_notice_period_progress_pct(self, obj):
+        if not obj.notice_period_start_date or obj.last_working_day <= obj.notice_period_start_date:
+            return 100
+        total = (obj.last_working_day - obj.notice_period_start_date).days
+        elapsed = (date.today() - obj.notice_period_start_date).days
+        return max(0, min(100, round((elapsed / total) * 100)))
+
+    def get_overall_status(self, obj):
+        if obj.completed_at:
+            return 'completed'
+        if obj.last_working_day >= date.today():
+            return 'notice_period'
+        return 'clearance_pending'
+
+    def get_has_interview(self, obj):
+        return hasattr(obj, 'interview')
+
+
+class ExitInterviewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExitInterview
+        fields = '__all__'
+        read_only_fields = ['exit']
+
+
+class ExitChecklistItemSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source='exit.employee.full_name', read_only=True)
+    assigned_to_username = serializers.CharField(source='assigned_to.username', read_only=True, default=None)
+    category_label = serializers.CharField(source='get_category_display', read_only=True)
+    status_label = serializers.CharField(source='get_status_display', read_only=True)
+    is_overdue = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ExitChecklistItem
+        fields = '__all__'
+        read_only_fields = ['exit', 'completed', 'completed_at']
+
+    def get_is_overdue(self, obj):
+        return bool(obj.due_date and obj.due_date < date.today() and obj.status != 'completed')
 
 
 class HolidaySerializer(serializers.ModelSerializer):

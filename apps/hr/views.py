@@ -22,6 +22,7 @@ from apps.companies.mixins import CompanyScopedMixin
 from .models import (Attendance, Department, Employee, LeaveRequest, LeavePolicy, PaySlip,
                      Payroll, SalaryStructure, Shift,
                      PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement,
+                     ExitInterview, ExitChecklistItem,
                      Holiday, Overtime)
 from .serializers import (AttendanceSerializer, DepartmentSerializer,
                           EmployeeSerializer, LeaveRequestSerializer, LeavePolicySerializer,
@@ -29,6 +30,7 @@ from .serializers import (AttendanceSerializer, DepartmentSerializer,
                           SalaryStructureSerializer, ShiftSerializer,
                           PerformanceReviewSerializer, EmployeeDocumentSerializer,
                           OnboardingChecklistSerializer, ExitManagementSerializer,
+                          ExitInterviewSerializer, ExitChecklistItemSerializer,
                           HolidaySerializer, OvertimeSerializer)
 
 # TEMPORARY: xerxez.com is not yet verified in Resend, so sends must use
@@ -1430,8 +1432,157 @@ class OnboardingChecklistViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         return Response(OnboardingChecklistSerializer(qs, many=True, context={'request': request}).data)
 
 
+DEFAULT_EXIT_CHECKLIST_TASKS = [
+    ('before_last_day', 'Resignation letter received'),
+    ('before_last_day', 'Exit interview scheduled'),
+    ('before_last_day', 'Knowledge transfer document created'),
+    ('before_last_day', 'Handover to replacement/team done'),
+    ('before_last_day', 'Projects handover completed'),
+    ('it_access', 'Laptop returned'),
+    ('it_access', 'ID card returned'),
+    ('it_access', 'Email access revoked'),
+    ('it_access', 'System access revoked'),
+    ('it_access', 'CRM/ERP access removed'),
+    ('it_access', 'Company WhatsApp removed'),
+    ('hr_finance', 'Exit interview completed'),
+    ('hr_finance', 'Full and final settlement calculated'),
+    ('hr_finance', 'Final salary processed'),
+    ('hr_finance', 'Experience letter issued'),
+    ('hr_finance', 'Relieving letter issued'),
+    ('hr_finance', 'PF withdrawal form submitted'),
+    ('hr_finance', 'Gratuity processed (if applicable)'),
+]
+
+# Termination is the only exit type that doesn't leave the Employee record in "resigned" —
+# everything else (voluntary or not) reads the same from the employee-status point of view.
+EXIT_REASON_TO_EMPLOYEE_STATUS = {
+    'resignation': 'resigned', 'retirement': 'resigned', 'contract_end': 'resigned',
+    'absconding': 'resigned', 'termination': 'terminated',
+}
+
+
+def _pending_leave_balance(employee):
+    """Remaining *annual* (earned) leave balance for this calendar year — same
+    allowance-minus-used math as LeaveRequestViewSet.balance. Only annual leave is
+    considered encashable: summing every leave type (including sick/emergency/maternity/
+    paternity, which employees are granted but don't bank as cash) would wildly inflate the
+    settlement — real HR practice only encashes unused earned/annual leave."""
+    if not employee.company_id:
+        return 0
+    year = timezone.now().year
+    policy = LeavePolicy.objects.filter(company=employee.company, leave_type='annual', is_active=True).first()
+    if not policy:
+        return 0
+    used = LeaveRequest.objects.filter(
+        employee=employee, type='annual', status='approved', from_date__year=year,
+    ).aggregate(total=Sum('days'))['total'] or 0
+    total_remaining = max(policy.days_allowed - float(used), 0)
+    return total_remaining
+
+
+def _calculate_settlement(employee, last_working_day):
+    """Full-and-final settlement breakdown: pending salary (prorated basic salary for the
+    days worked in the exit month) + leave encashment (pending leave balance x daily rate)
+    + gratuity (standard India formula, 15/26 x last basic x years served, 5+ years only)
+    - the employee's standard recurring deductions from SalaryStructure (prorated the same
+    way as the partial month's salary)."""
+    try:
+        ss = employee.salary_structure
+    except SalaryStructure.DoesNotExist:
+        ss = None
+
+    basic = float(ss.basic_salary) if ss else 0
+    _, days_in_month = calendar.monthrange(last_working_day.year, last_working_day.month)
+    pending_salary_days = last_working_day.day
+    daily_rate = basic / days_in_month if days_in_month else 0
+    pending_salary_amount = round(daily_rate * pending_salary_days, 2)
+
+    pending_leaves = _pending_leave_balance(employee)
+    leave_encashment_amount = round(float(pending_leaves) * daily_rate, 2)
+
+    gratuity_amount = 0
+    if employee.joined_on and basic:
+        years_served = (last_working_day - employee.joined_on).days / 365.25
+        if years_served >= 5:
+            gratuity_amount = round((15 / 26) * basic * years_served, 2)
+
+    monthly_deductions = sum(float(v) for v in ss.deductions.values()) if ss else 0
+    deductions_amount = round(monthly_deductions * (pending_salary_days / days_in_month), 2) if days_in_month else 0
+
+    total = round(pending_salary_amount + leave_encashment_amount + gratuity_amount - deductions_amount, 2)
+    return {
+        'pending_leaves': pending_leaves,
+        'leave_encashment_amount': leave_encashment_amount,
+        'gratuity_amount': gratuity_amount,
+        'pending_salary_days': pending_salary_days,
+        'pending_salary_amount': pending_salary_amount,
+        'deductions_amount': deductions_amount,
+        'final_settlement_amount': total,
+    }
+
+
+def _send_exit_settlement_paid_email(exit_obj):
+    if not exit_obj.employee.email:
+        return
+    subject = 'Your Full and Final Settlement Has Been Paid'
+
+    plain = f"""
+Hi {exit_obj.employee.full_name},
+
+Your full and final settlement has been paid.
+
+Amount: {exit_obj.final_settlement_amount}
+Payment Date: {exit_obj.settlement_paid_date}
+Payment Mode: {exit_obj.get_settlement_payment_mode_display()}
+Reference Number: {exit_obj.settlement_reference_number or '—'}
+
+— XERXEZ HR
+""".strip()
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8">
+<style>
+  body{{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;padding:0}}
+  .wrap{{max-width:560px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;
+         box-shadow:0 4px 32px rgba(0,0,0,.10)}}
+  .hdr{{background:linear-gradient(135deg,#1a1208 0%,#0f0a05 100%);padding:36px 44px;text-align:center}}
+  .hdr h1{{color:#C9883A;font-family:Georgia,serif;font-size:24px;margin:0 0 6px}}
+  .hdr p{{color:rgba(255,255,255,.42);font-size:13px;margin:0}}
+  .body{{padding:36px 44px}}
+  .badge{{display:inline-block;padding:5px 16px;border-radius:100px;font-size:11px;
+           font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:22px;
+           background:#d1fae5;color:#065f46}}
+  table{{width:100%;border-collapse:collapse}}
+  tr:nth-child(even) td{{background:#fafaf8}}
+  td{{padding:12px 14px;font-size:14px;color:#333;vertical-align:top;border-bottom:1px solid #f0ede8}}
+  td:first-child{{width:38%;font-weight:700;color:#5a5650;font-size:11px;text-transform:uppercase;letter-spacing:.09em}}
+  .ftr{{background:#F8F7F4;border-top:1px solid #e8e4de;padding:18px 44px;
+        text-align:center;font-size:12px;color:#9b9690}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr"><h1>XERXEZ</h1><p>Full & Final Settlement Paid</p></div>
+  <div class="body">
+    <span class="badge">Paid</span>
+    <table>
+      <tr><td>Amount</td>           <td>{exit_obj.final_settlement_amount}</td></tr>
+      <tr><td>Payment Date</td>     <td>{exit_obj.settlement_paid_date}</td></tr>
+      <tr><td>Payment Mode</td>     <td>{exit_obj.get_settlement_payment_mode_display()}</td></tr>
+      <tr><td>Reference Number</td> <td>{exit_obj.settlement_reference_number or '—'}</td></tr>
+    </table>
+  </div>
+  <div class="ftr">XERXEZ HR &nbsp;·&nbsp; xerxez.com</div>
+</div>
+</body>
+</html>"""
+
+    send_via_resend(to=exit_obj.employee.email, subject=subject, html=html, text=plain, from_email=FROM_EMAIL)
+
+
 class ExitManagementViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
-    queryset = ExitManagement.objects.select_related('employee').all()
+    queryset = ExitManagement.objects.select_related('employee__department').all()
     serializer_class = ExitManagementSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
@@ -1439,26 +1590,203 @@ class ExitManagementViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['employee', 'reason', 'settlement_paid']
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            return qs.filter(employee=employee) if employee else qs.none()
+        return qs
+
+    def _require_privileged(self):
+        if not _is_hr_privileged(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only Company Admin or HR Manager can manage exits.')
+
     def perform_create(self, serializer):
+        self._require_privileged()
         employee = serializer.validated_data.get('employee')
-        serializer.save(company=employee.company if employee else None)
+        last_working_day = serializer.validated_data.get('last_working_day')
+        notice_period_days = serializer.validated_data.get('notice_period_days', 30)
+        notice_period_start_date = last_working_day - timedelta(days=notice_period_days)
+        breakdown = _calculate_settlement(employee, last_working_day)
+
+        interviewer_name = self.request.data.get('interviewer_name', '')
+        exit_interview_scheduled = serializer.validated_data.get('exit_interview_scheduled', False)
+        exit_interview_date = serializer.validated_data.get('exit_interview_date')
+
+        instance = serializer.save(
+            company=employee.company if employee else None,
+            notice_period_start_date=notice_period_start_date,
+            **breakdown,
+        )
+
+        if employee:
+            employee.status = 'serving_notice'
+            employee.save(update_fields=['status'])
+
+        ExitChecklistItem.objects.bulk_create([
+            ExitChecklistItem(exit=instance, category=cat, task=t, order=i, company=instance.company)
+            for i, (cat, t) in enumerate(DEFAULT_EXIT_CHECKLIST_TASKS)
+        ])
+
+        if exit_interview_scheduled or exit_interview_date or interviewer_name:
+            ExitInterview.objects.create(exit=instance, interview_date=exit_interview_date, interviewer_name=interviewer_name)
+
+    def perform_update(self, serializer):
+        self._require_privileged()
+        instance = serializer.instance
+        # Recompute the settlement if the date/type it's based on changes — but never after
+        # it's already been paid out, so a later edit can't silently alter a paid amount.
+        if not instance.settlement_paid and ('last_working_day' in serializer.validated_data or 'reason' in serializer.validated_data):
+            new_last_working_day = serializer.validated_data.get('last_working_day', instance.last_working_day)
+            new_notice_days = serializer.validated_data.get('notice_period_days', instance.notice_period_days)
+            breakdown = _calculate_settlement(instance.employee, new_last_working_day)
+            serializer.save(notice_period_start_date=new_last_working_day - timedelta(days=new_notice_days), **breakdown)
+        else:
+            serializer.save()
+
+    def perform_destroy(self, instance):
+        self._require_privileged()
+        super().perform_destroy(instance)
+
+    @action(detail=False, methods=['get'], url_path='preview-settlement')
+    def preview_settlement(self, request):
+        """GET /hr/exit/preview-settlement/?employee=&last_working_day= — the same breakdown
+        perform_create would compute, without saving anything. Lets the Initiate Exit form
+        show the calculation live as HR fills in employee + last working day."""
+        self._require_privileged()
+        employee_id = request.query_params.get('employee')
+        last_working_day = request.query_params.get('last_working_day')
+        if not employee_id or not last_working_day:
+            return Response({'detail': 'employee and last_working_day query params are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            employee = Employee.objects.get(pk=employee_id)
+            lwd = date.fromisoformat(last_working_day)
+        except (Employee.DoesNotExist, ValueError):
+            return Response({'detail': 'Invalid employee or date.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(_calculate_settlement(employee, lwd))
+
+    @action(detail=True, methods=['post'], url_path='recalculate')
+    def recalculate(self, request, pk=None):
+        self._require_privileged()
+        rec = self.get_object()
+        if rec.settlement_paid:
+            return Response({'detail': 'Settlement has already been paid — cannot recalculate.'}, status=status.HTTP_400_BAD_REQUEST)
+        breakdown = _calculate_settlement(rec.employee, rec.last_working_day)
+        for field, value in breakdown.items():
+            setattr(rec, field, value)
+        rec.save()
+        return Response(ExitManagementSerializer(rec, context={'request': request}).data)
 
     @action(detail=True, methods=['patch'], url_path='mark-interview-done')
     def mark_interview_done(self, request, pk=None):
+        self._require_privileged()
         rec = self.get_object()
         rec.exit_interview_done = True
         rec.save()
-        return Response(ExitManagementSerializer(rec).data)
+        return Response(ExitManagementSerializer(rec, context={'request': request}).data)
 
     @action(detail=True, methods=['patch'], url_path='mark-settlement-paid')
     def mark_settlement_paid(self, request, pk=None):
+        self._require_privileged()
         rec = self.get_object()
         rec.settlement_paid = True
+        rec.settlement_paid_date = request.data.get('payment_date') or date.today().isoformat()
+        rec.settlement_payment_mode = request.data.get('payment_mode', rec.settlement_payment_mode)
+        rec.settlement_reference_number = request.data.get('reference_number', rec.settlement_reference_number)
         amount = request.data.get('final_settlement_amount')
         if amount is not None:
             rec.final_settlement_amount = amount
         rec.save()
-        return Response(ExitManagementSerializer(rec).data)
+        _send_exit_settlement_paid_email(rec)
+        return Response(ExitManagementSerializer(rec, context={'request': request}).data)
+
+    @action(detail=True, methods=['patch'], url_path='mark-complete')
+    def mark_complete(self, request, pk=None):
+        self._require_privileged()
+        rec = self.get_object()
+        rec.completed_at = timezone.now()
+        rec.save(update_fields=['completed_at'])
+        rec.employee.status = EXIT_REASON_TO_EMPLOYEE_STATUS.get(rec.reason, 'resigned')
+        rec.employee.save(update_fields=['status'])
+        return Response(ExitManagementSerializer(rec, context={'request': request}).data)
+
+    @action(detail=True, methods=['get', 'post', 'patch'], url_path='interview')
+    def interview(self, request, pk=None):
+        """GET/POST/PATCH /hr/exit/{id}/interview/ — the detailed exit interview record
+        (ratings, detailed reason, feedback). GET is readable by anyone who can see the exit
+        record itself (including the departing employee); writing requires HR privilege and
+        marks the exit's exit_interview_done flag."""
+        rec = self.get_object()
+        if request.method == 'GET':
+            try:
+                return Response(ExitInterviewSerializer(rec.interview).data)
+            except ExitInterview.DoesNotExist:
+                return Response(None)
+        self._require_privileged()
+        interview, _created = ExitInterview.objects.get_or_create(exit=rec)
+        ser = ExitInterviewSerializer(interview, data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        rec.exit_interview_done = True
+        rec.save(update_fields=['exit_interview_done'])
+        return Response(ser.data)
+
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        qs = self.get_queryset()
+        today = date.today()
+        return Response({
+            'total': qs.count(),
+            'pending_settlement': qs.filter(settlement_paid=False).count(),
+            'interviews_done': qs.filter(exit_interview_done=True).count(),
+            'notice_period_active': qs.filter(last_working_day__gte=today, completed_at__isnull=True).count(),
+            'completed_exits': qs.filter(completed_at__isnull=False).count(),
+        })
+
+
+class ExitChecklistItemViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
+    queryset = ExitChecklistItem.objects.select_related('exit__employee', 'assigned_to').all()
+    serializer_class = ExitChecklistItemSerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
+    module_name = 'hr'
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['exit', 'completed', 'status', 'category']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            return qs.filter(exit__employee=employee) if employee else qs.none()
+        return qs
+
+    def _require_privileged(self):
+        if not _is_hr_privileged(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only Company Admin or HR Manager can manage the exit checklist.')
+
+    def perform_create(self, serializer):
+        self._require_privileged()
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._require_privileged()
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._require_privileged()
+        super().perform_destroy(instance)
+
+    @action(detail=True, methods=['patch'], url_path='toggle')
+    def toggle(self, request, pk=None):
+        self._require_privileged()
+        item = self.get_object()
+        item.completed = not item.completed
+        item.completed_at = timezone.now() if item.completed else None
+        item.status = 'completed' if item.completed else 'pending'
+        item.save()
+        return Response(ExitChecklistItemSerializer(item, context={'request': request}).data)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

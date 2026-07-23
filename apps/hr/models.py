@@ -1,6 +1,7 @@
 """HR models: departments, employees, attendance, leave, shifts, payroll."""
 from datetime import date
 from django.conf import settings
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.utils import timezone
 
@@ -36,6 +37,7 @@ class Employee(models.Model):
     STATUS = [
         ('active', 'Active'),
         ('on_leave', 'On Leave'),
+        ('serving_notice', 'Serving Notice'),
         ('resigned', 'Resigned'),
         ('terminated', 'Terminated'),
     ]
@@ -420,17 +422,47 @@ class ExitManagement(models.Model):
         'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
         related_name='%(app_label)s_%(class)s',
     )
+    # Called "Exit Type" in the UI — kept as `reason` (not renamed) since it already existed
+    # and renaming a live column has no functional upside.
     REASON_CHOICES = [
         ('resignation', 'Resignation'), ('termination', 'Termination'),
-        ('retirement', 'Retirement'), ('contract_end', 'Contract End'),
+        ('retirement', 'Retirement'), ('absconding', 'Absconding'),
+        ('contract_end', 'End of Contract'),
+    ]
+    PAYMENT_MODE_CHOICES = [
+        ('bank_transfer', 'Bank Transfer'), ('cheque', 'Cheque'), ('cash', 'Cash'),
     ]
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='exit')
     reason = models.CharField(max_length=20, choices=REASON_CHOICES)
     last_working_day = models.DateField()
     notice_period_days = models.IntegerField(default=30)
-    exit_interview_done = models.BooleanField(default=False)
+    # Auto-filled = last_working_day - notice_period_days, see ExitManagementViewSet.perform_create.
+    notice_period_start_date = models.DateField(null=True, blank=True)
+
+    # Final settlement breakdown — auto-calculated in _calculate_settlement(), not entered
+    # directly (final_settlement_amount stays editable at the API level for HR to override,
+    # but the frontend renders it read-only per spec).
+    pending_leaves = models.DecimalField(max_digits=6, decimal_places=1, default=0)
+    leave_encashment_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    gratuity_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    pending_salary_days = models.IntegerField(default=0)
+    pending_salary_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    deductions_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     final_settlement_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
     settlement_paid = models.BooleanField(default=False)
+    settlement_paid_date = models.DateField(null=True, blank=True)
+    settlement_payment_mode = models.CharField(max_length=20, choices=PAYMENT_MODE_CHOICES, blank=True)
+    settlement_reference_number = models.CharField(max_length=100, blank=True)
+
+    exit_interview_scheduled = models.BooleanField(default=False)
+    exit_interview_date = models.DateField(null=True, blank=True)
+    exit_interview_done = models.BooleanField(default=False)
+
+    # Prevents send_exit_reminders from re-emailing HR every time it runs.
+    notice_reminder_sent = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -440,6 +472,75 @@ class ExitManagement(models.Model):
 
     def __str__(self):
         return f'{self.employee} — {self.get_reason_display()}'
+
+
+class ExitInterview(models.Model):
+    exit = models.OneToOneField(ExitManagement, on_delete=models.CASCADE, related_name='interview')
+    interview_date = models.DateField(null=True, blank=True)
+    interviewer_name = models.CharField(max_length=200, blank=True)
+    reason_for_leaving = models.TextField(blank=True)
+    job_satisfaction_rating = models.IntegerField(null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(5)])
+    management_rating = models.IntegerField(null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(5)])
+    work_environment_rating = models.IntegerField(null=True, blank=True, validators=[MinValueValidator(1), MaxValueValidator(5)])
+    would_recommend = models.BooleanField(null=True, blank=True)
+    liked_most = models.TextField(blank=True)
+    could_improve = models.TextField(blank=True)
+    suggestions = models.TextField(blank=True)
+    interview_notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'hr_exit_interview'
+
+    def __str__(self):
+        return f'Exit interview — {self.exit.employee}'
+
+
+class ExitChecklistItem(models.Model):
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='%(app_label)s_%(class)s',
+    )
+    CATEGORY_CHOICES = [
+        ('before_last_day', 'Before Last Day'),
+        ('it_access', 'IT & Access'),
+        ('hr_finance', 'HR & Finance'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+    ]
+    exit = models.ForeignKey(ExitManagement, on_delete=models.CASCADE, related_name='checklist')
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='before_last_day')
+    task = models.CharField(max_length=200)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    assigned_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='assigned_exit_tasks',
+    )
+    due_date = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    completed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = 'hr_exit_checklist'
+        ordering = ['order']
+
+    def __str__(self):
+        return f'{self.exit.employee} — {self.task}'
+
+    def save(self, *args, **kwargs):
+        if self.status == 'completed' and not self.completed:
+            self.completed = True
+            if not self.completed_at:
+                self.completed_at = timezone.now()
+        elif self.status != 'completed' and self.completed:
+            self.completed = False
+            self.completed_at = None
+        super().save(*args, **kwargs)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
