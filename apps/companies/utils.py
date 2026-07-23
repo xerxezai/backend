@@ -67,6 +67,25 @@ def get_user_company(user):
         return None
 
 
+def get_user_company_or_default(user):
+    """get_user_company(user), falling back to the single Company row if there's genuinely
+    only one in the whole system (this deployment's current reality) and the user has none
+    of their own — covers platform superusers (Danish, Tanzeem), who have no CompanyUser
+    membership at all since they're not scoped to any one company. Used by data-fix/backfill
+    commands that create or repair an Employee record outside the normal API request path
+    (where a real X-Active-Company-Id / CompanyUser signal is always available), so those
+    commands stop being able to silently produce a company=NULL row — exactly what caused
+    Danish's, Tanzeem's, and any --create-linked Employee's company to end up unset.
+    Returns None (never guesses) if more than one Company exists and the user has no
+    membership — an ambiguous case that needs a real signal, not a default."""
+    company = get_user_company(user)
+    if company:
+        return company
+    if Company.objects.count() == 1:
+        return Company.objects.first()
+    return None
+
+
 def get_user_company_role(user):
     """Get user's role in their company."""
     try:

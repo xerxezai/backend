@@ -48,12 +48,23 @@ class Command(BaseCommand):
 
         if employee is None:
             if opts['create']:
+                from apps.companies.utils import get_user_company_or_default
                 employee = Employee.objects.create(
                     code=self._gen_code(),
                     full_name=user.get_full_name() or user.username,
                     email=user.email,
                     user=user,
+                    # Bug fix: this never set company, so an Employee created this way was
+                    # invisible to any company-scoped query (Company Admin's employee list,
+                    # attendance, leave, payroll...) even though the link itself "worked".
+                    company=get_user_company_or_default(user),
                 )
+                if employee.company_id is None:
+                    self.stdout.write(self.style.WARNING(
+                        f"Could not determine a company for '{user.username}' — created Employee "
+                        f"#{employee.id} with no company set. It won't show up in any Company "
+                        f"Admin's employee list until company is set manually."
+                    ))
                 self.stdout.write(self.style.SUCCESS(
                     f"Created Employee #{employee.id} ({employee.full_name}) and linked to user '{user.username}' (id={user.id})."
                 ))

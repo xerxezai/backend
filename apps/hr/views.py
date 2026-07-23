@@ -203,6 +203,18 @@ class EmployeeViewSet(RBACScopedMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         self._require_privileged()
+        # Refuse to silently create an Employee with no company — that row would be
+        # invisible to every company-scoped query afterwards (the exact bug that let
+        # setup_admin_employees and `link_employee_user --create` produce orphaned records
+        # for Danish/Tanzeem and any manually-linked account; see backfill_employee_company
+        # for the one-time repair of rows already created that way). A platform admin
+        # (super_admin, no company selected in the Company Switcher) is exempt — "no
+        # company" genuinely means "not scoped to one yet" for them, not a resolution failure.
+        from apps.companies.utils import resolve_company
+        company, is_platform_admin = resolve_company(self.request)
+        if not is_platform_admin and not company:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'detail': 'Could not determine your company — contact your Super Admin before adding employees.'})
         try:
             super().perform_create(serializer)
         except IntegrityError as exc:
