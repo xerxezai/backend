@@ -2,6 +2,7 @@
 from datetime import date
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from apps.core.validators import validate_phone_with_country_code
 
@@ -368,10 +369,32 @@ class OnboardingChecklist(models.Model):
         'companies.Company', on_delete=models.CASCADE, null=True, blank=True,
         related_name='%(app_label)s_%(class)s',
     )
+    CATEGORY_CHOICES = [
+        ('pre_joining', 'Pre-Joining'),
+        ('day_1', 'Day 1'),
+        ('first_week', 'First Week'),
+        ('first_month', 'First Month'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+    ]
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='onboarding')
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='pre_joining')
     task = models.CharField(max_length=200)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    assigned_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='assigned_onboarding_tasks',
+    )
+    due_date = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    # Kept for backward compatibility with existing filters/consumers — `status` is now the
+    # primary field; save() keeps these in sync with it automatically.
     completed = models.BooleanField(default=False)
     completed_at = models.DateTimeField(null=True, blank=True)
+    # Prevents send_onboarding_reminders from re-emailing the assignee every time it runs.
+    reminder_sent = models.BooleanField(default=False)
     order = models.IntegerField(default=0)
 
     class Meta:
@@ -380,6 +403,16 @@ class OnboardingChecklist(models.Model):
 
     def __str__(self):
         return f'{self.employee} — {self.task}'
+
+    def save(self, *args, **kwargs):
+        if self.status == 'completed' and not self.completed:
+            self.completed = True
+            if not self.completed_at:
+                self.completed_at = timezone.now()
+        elif self.status != 'completed' and self.completed:
+            self.completed = False
+            self.completed_at = None
+        super().save(*args, **kwargs)
 
 
 class ExitManagement(models.Model):

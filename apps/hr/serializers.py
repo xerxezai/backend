@@ -240,11 +240,20 @@ class EmployeeDocumentSerializer(serializers.ModelSerializer):
 
 class OnboardingChecklistSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source='employee.full_name', read_only=True)
+    employee_code = serializers.CharField(source='employee.code', read_only=True)
+    department_name = serializers.CharField(source='employee.department.name', read_only=True, default=None)
+    assigned_to_username = serializers.CharField(source='assigned_to.username', read_only=True, default=None)
+    category_label = serializers.CharField(source='get_category_display', read_only=True)
+    status_label = serializers.CharField(source='get_status_display', read_only=True)
+    is_overdue = serializers.SerializerMethodField()
 
     class Meta:
         model = OnboardingChecklist
         fields = '__all__'
-        read_only_fields = ['employee', 'completed_at']
+        read_only_fields = ['employee', 'completed', 'completed_at', 'reminder_sent']
+
+    def get_is_overdue(self, obj):
+        return bool(obj.due_date and obj.due_date < date.today() and obj.status != 'completed')
 
 
 class ExitManagementSerializer(serializers.ModelSerializer):

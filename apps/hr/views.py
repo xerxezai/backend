@@ -199,6 +199,53 @@ def _maybe_notify_document_expiring(document):
         document.save(update_fields=['expiry_notified'])
 
 
+def _onboarding_all_complete(employee):
+    return not OnboardingChecklist.objects.filter(employee=employee).exclude(status='completed').exists()
+
+
+def _send_onboarding_complete_email(employee):
+    recipients = _hr_recipient_emails(employee.company)
+    subject = f"Onboarding Complete — {employee.full_name}"
+
+    plain = f"""
+{employee.full_name}'s onboarding checklist is now 100% complete.
+
+— XERXEZ HR
+""".strip()
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8">
+<style>
+  body{{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;padding:0}}
+  .wrap{{max-width:560px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;
+         box-shadow:0 4px 32px rgba(0,0,0,.10)}}
+  .hdr{{background:linear-gradient(135deg,#1a1208 0%,#0f0a05 100%);padding:36px 44px;text-align:center}}
+  .hdr h1{{color:#C9883A;font-family:Georgia,serif;font-size:24px;margin:0 0 6px}}
+  .hdr p{{color:rgba(255,255,255,.42);font-size:13px;margin:0}}
+  .body{{padding:36px 44px}}
+  .badge{{display:inline-block;padding:5px 16px;border-radius:100px;font-size:11px;
+           font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:22px;
+           background:#d1fae5;color:#065f46}}
+  .ftr{{background:#F8F7F4;border-top:1px solid #e8e4de;padding:18px 44px;
+        text-align:center;font-size:12px;color:#9b9690}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr"><h1>XERXEZ</h1><p>Onboarding Complete</p></div>
+  <div class="body">
+    <span class="badge">100% Complete</span>
+    <p style="font-size:14px;color:#333">{employee.full_name}'s onboarding checklist is now fully complete — welcome aboard!</p>
+  </div>
+  <div class="ftr">XERXEZ HR &nbsp;·&nbsp; xerxez.com</div>
+</div>
+</body>
+</html>"""
+
+    send_via_resend(to=recipients, subject=subject, html=html, text=plain, from_email=FROM_EMAIL)
+
+
 def _is_hr_privileged(user):
     """Super Admin / Admin (Django is_staff or is_superuser) / Company Admin / HR Manager
     (RBAC module_admin scoped to the 'hr' module) — the roles that see and manage every
@@ -245,12 +292,24 @@ def _own_employee_or_none(request):
 
 
 DEFAULT_ONBOARDING_TASKS = [
-    'Email account created',
-    'Laptop/equipment assigned',
-    'Access cards issued',
-    'HR documentation completed',
-    'Team introduction done',
-    'First week training completed',
+    ('pre_joining', 'Send offer letter'),
+    ('pre_joining', 'Collect signed offer letter'),
+    ('pre_joining', 'Background verification initiated'),
+    ('pre_joining', 'Collect documents (Aadhaar, PAN, Degree)'),
+    ('day_1', 'Welcome email sent'),
+    ('day_1', 'ID card issued'),
+    ('day_1', 'Laptop/system assigned'),
+    ('day_1', 'Email account created'),
+    ('day_1', 'Add to company WhatsApp group'),
+    ('first_week', 'Department introduction done'),
+    ('first_week', 'Team meeting scheduled'),
+    ('first_week', 'HR policies explained'),
+    ('first_week', 'Leave policy explained'),
+    ('first_week', 'Payroll details collected (bank account)'),
+    ('first_month', 'Probation review scheduled'),
+    ('first_month', 'Training plan assigned'),
+    ('first_month', 'Performance goals set'),
+    ('first_month', 'Mentor assigned'),
 ]
 
 
@@ -408,14 +467,17 @@ class EmployeeViewSet(RBACScopedMixin, viewsets.ModelViewSet):
     def onboarding(self, request, pk=None):
         employee = self.get_object()
         if request.method == 'POST':
-            # Seed the default 6-item checklist if none exists yet.
+            # Starting onboarding (seeding the default checklist) is an HR action — a
+            # regular employee can view their own checklist (GET, below) but not kick it off.
+            if not _is_hr_privileged(request.user):
+                return Response({'detail': 'Only Company Admin or HR Manager can start onboarding.'}, status=status.HTTP_403_FORBIDDEN)
             if not employee.onboarding.exists():
                 OnboardingChecklist.objects.bulk_create([
-                    OnboardingChecklist(employee=employee, task=t, order=i, company=employee.company)
-                    for i, t in enumerate(DEFAULT_ONBOARDING_TASKS)
+                    OnboardingChecklist(employee=employee, category=cat, task=t, order=i, company=employee.company)
+                    for i, (cat, t) in enumerate(DEFAULT_ONBOARDING_TASKS)
                 ])
         qs = employee.onboarding.all()
-        return Response(OnboardingChecklistSerializer(qs, many=True).data)
+        return Response(OnboardingChecklistSerializer(qs, many=True, context={'request': request}).data)
 
 
 class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
@@ -1257,21 +1319,115 @@ class EmployeeDocumentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
 
 
 class OnboardingChecklistViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
-    queryset = OnboardingChecklist.objects.select_related('employee').all()
+    queryset = OnboardingChecklist.objects.select_related('employee__department', 'assigned_to').all()
     serializer_class = OnboardingChecklistSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated, ReadOnlyOrHigher]
     module_name = 'hr'
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['employee', 'completed']
+    filterset_fields = ['employee', 'completed', 'status', 'category']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            return qs.filter(employee=employee) if employee else qs.none()
+        return qs
+
+    def _require_privileged(self):
+        if not _is_hr_privileged(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only Company Admin or HR Manager can manage onboarding tasks.')
+
+    def perform_update(self, serializer):
+        self._require_privileged()
+        employee = serializer.instance.employee
+        was_complete_before = _onboarding_all_complete(employee)
+        instance = serializer.save()
+        if not was_complete_before and _onboarding_all_complete(employee):
+            _send_onboarding_complete_email(employee)
+
+    def perform_destroy(self, instance):
+        self._require_privileged()
+        super().perform_destroy(instance)
 
     @action(detail=True, methods=['patch'], url_path='toggle')
     def toggle(self, request, pk=None):
+        self._require_privileged()
         item = self.get_object()
+        employee = item.employee
+        was_complete_before = _onboarding_all_complete(employee)
         item.completed = not item.completed
         item.completed_at = timezone.now() if item.completed else None
+        item.status = 'completed' if item.completed else 'pending'
         item.save()
-        return Response(OnboardingChecklistSerializer(item).data)
+        if not was_complete_before and _onboarding_all_complete(employee):
+            _send_onboarding_complete_email(employee)
+        return Response(OnboardingChecklistSerializer(item, context={'request': request}).data)
+
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        """GET /hr/onboarding/stats/ — the 4 dashboard stat cards."""
+        qs = self.get_queryset()
+        employee_ids = qs.values_list('employee_id', flat=True).distinct()
+        total = in_progress = completed = not_started = 0
+        for emp_id in employee_ids:
+            total += 1
+            statuses = set(qs.filter(employee_id=emp_id).values_list('status', flat=True))
+            if statuses == {'completed'}:
+                completed += 1
+            elif statuses == {'pending'}:
+                not_started += 1
+            else:
+                in_progress += 1
+        return Response({'total': total, 'in_progress': in_progress, 'completed': completed, 'not_started': not_started})
+
+    @action(detail=False, methods=['get'], url_path='dashboard')
+    def dashboard(self, request):
+        """GET /hr/onboarding/dashboard/ — one summary row per employee currently
+        onboarding, for the Onboarding Dashboard table."""
+        qs = self.get_queryset()
+        by_employee: dict = {}
+        for item in qs:
+            by_employee.setdefault(item.employee_id, []).append(item)
+
+        rows = []
+        for emp_id, items in by_employee.items():
+            employee = items[0].employee
+            statuses = {i.status for i in items}
+            if statuses == {'completed'}:
+                overall = 'completed'
+            elif statuses == {'pending'}:
+                overall = 'not_started'
+            else:
+                overall = 'in_progress'
+            assignees = [i.assigned_to.username for i in items if i.assigned_to]
+            assigned_to = max(set(assignees), key=assignees.count) if assignees else None
+            completed_items = [i for i in items if i.status == 'completed']
+            completion_date = max((i.completed_at for i in completed_items), default=None) if overall == 'completed' else None
+            rows.append({
+                'employee_id': emp_id,
+                'employee_name': employee.full_name,
+                'employee_code': employee.code,
+                'department_name': employee.department.name if employee.department else None,
+                'joined_on': employee.joined_on,
+                'total_tasks': len(items),
+                'completed_tasks': len(completed_items),
+                'status': overall,
+                'assigned_to': assigned_to,
+                'completion_date': completion_date,
+            })
+        rows.sort(key=lambda r: r['employee_name'])
+        return Response(rows)
+
+    @action(detail=False, methods=['get'], url_path='overdue')
+    def overdue(self, request):
+        """GET /hr/onboarding/overdue/ — every incomplete task past its due date, for the
+        HR Dashboard alert. Admin/HR Manager only."""
+        if not _is_hr_privileged(request.user):
+            return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
+        qs = self.get_queryset().filter(due_date__lt=date.today()).exclude(status='completed').order_by('due_date')
+        return Response(OnboardingChecklistSerializer(qs, many=True, context={'request': request}).data)
 
 
 class ExitManagementViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
