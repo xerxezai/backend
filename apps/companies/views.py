@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from apps.rbac.models import Module, UserModuleAccess
+from apps.core.email import send_welcome_email
 from .models import Company, CompanyUser
 from .serializers import CompanySerializer, CompanyUserSerializer
 from .utils import resolve_company, get_user_company, get_user_company_role
@@ -262,6 +263,11 @@ class MyCompanyUsersView(APIView):
                 UserModuleAccess.objects.create(user=user, module=module, role=role, granted_by=request.user)
         except Exception as e:
             return Response({'error': str(e)}, status=400)
+
+        send_welcome_email(
+            full_name=data['full_name'], email=user.email, username=user.username,
+            password=data['password'], company_name=company.name, role=role,
+        )
 
         return Response({'message': 'User added', 'user_id': user.id}, status=201)
 

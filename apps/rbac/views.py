@@ -13,6 +13,7 @@ from .serializers import (
     AccessRequestSerializer,
 )
 from .utils import get_user_role
+from apps.core.email import send_welcome_email
 
 User = get_user_model()
 
@@ -112,6 +113,11 @@ class UserManagementView(APIView):
         if company:
             from apps.companies.models import CompanyUser
             CompanyUser.objects.get_or_create(user=user, company=company, defaults={'role': role})
+
+        send_welcome_email(
+            full_name=data['full_name'], email=user.email, username=user.username,
+            password=data['password'], company_name=company.name if company else None, role=role,
+        )
 
         return Response({'message': 'User created', 'user_id': user.id}, status=status.HTTP_201_CREATED)
 

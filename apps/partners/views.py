@@ -140,12 +140,28 @@ Email: {p.email}
 Password: {password}
 
 Commission Structure:
-Basic Package: 10%
-Professional Package: 20%
-Enterprise Package: 30%
+Basic Package (1-2 modules): 10%
+Professional Package (3-5 modules): 20%
+Enterprise Package (all modules): 30%
+- Paid within 30 days of client payment
+- No cap on earnings
+- Payment in AED, USD, or INR
 
 Please change your password after first login.
 
+How to Get Started:
+1. Login at xerxez.com/partner
+2. Complete your profile
+3. Explore training materials
+4. Submit your first client deal
+5. Track your commissions
+
+Need Help?
+Email: info@xerxez.com
+WhatsApp: +971 56 786 7451
+Partner Portal: xerxez.com/partner
+
+Welcome to the XERXEZ Partner family!
 XERXEZ Team
 """.strip()
     html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
@@ -159,6 +175,10 @@ body{{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;paddin
 .creds p{{margin:4px 0;color:#5a5650}}
 .creds strong{{color:#1a1a1a}}
 .tiers{{background:#fafaf8;border-radius:10px;padding:14px 20px;margin:16px 0;font-size:13px;color:#5a5650}}
+.tiers ul{{margin:8px 0 0;padding-left:20px}}
+.steps{{background:#fafaf8;border-radius:10px;padding:16px 20px;margin:16px 0;font-size:13px;color:#5a5650}}
+.steps strong{{color:#1a1a1a;display:block;margin-bottom:6px}}
+.steps ol{{margin:0;padding-left:20px}}
 .cta{{display:inline-block;margin-top:10px;padding:13px 32px;background:linear-gradient(145deg,#e8a84e,#C9883A);color:#fff!important;font-size:13px;font-weight:700;border-radius:100px;text-decoration:none;box-shadow:0 4px 12px rgba(201,136,58,.28)}}
 .ftr{{background:#1a1a1a;border-top:1px solid #2c2c2c;padding:18px 40px;text-align:center;font-size:12px;color:rgba(255,255,255,.45)}}
 </style></head><body><div class="wrap">
@@ -174,12 +194,20 @@ body{{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;paddin
 </div>
 <div class="tiers">
 <strong>Commission Structure</strong><br>
-Basic Package: 10%<br>Professional Package: 20%<br>Enterprise Package: 30%
+Basic Package (1-2 modules): 10%<br>Professional Package (3-5 modules): 20%<br>Enterprise Package (all modules): 30%
+<ul><li>Paid within 30 days of client payment</li><li>No cap on earnings</li><li>Payment in AED, USD, or INR</li></ul>
 </div>
 <p style="color:#9b9690">Please change your password after first login.</p>
+<div class="steps">
+<strong>How to Get Started</strong>
+<ol><li>Login at xerxez.com/partner</li><li>Complete your profile</li><li>Explore training materials</li>
+<li>Submit your first client deal</li><li>Track your commissions</li></ol>
+</div>
 <div style="text-align:center"><a class="cta" href="https://www.xerxez.com/partner">Open Partner Portal</a></div>
-<p>Best regards,<br><strong>The XERXEZ Team</strong></p></div>
-<div class="ftr">XERXEZ &nbsp;·&nbsp; xerxez.in@gmail.com &nbsp;·&nbsp; xerxez.com</div>
+<p style="margin-top:24px">Need help? Email <a href="mailto:info@xerxez.com" style="color:#C9883A">info@xerxez.com</a>
+or WhatsApp +971 56 786 7451.</p>
+<p>Welcome to the XERXEZ Partner family!<br><strong>The XERXEZ Team</strong></p></div>
+<div class="ftr">XERXEZ &nbsp;·&nbsp; info@xerxez.com &nbsp;·&nbsp; xerxez.com</div>
 </div></body></html>"""
     return plain, html
 
