@@ -310,16 +310,26 @@ class EmployeeDocument(models.Model):
     # though they're no longer offered in the dropdown — Django only validates `choices`
     # on serializer/form input, not on read, so nothing breaks for existing documents.
     DOC_TYPE_CHOICES = [
+        ('aadhar_card', 'Aadhaar Card'),
+        ('pan_card', 'PAN Card'),
         ('passport', 'Passport'),
+        ('driving_license', 'Driving License'),
         ('emirates_id', 'Emirates ID'),
-        ('aadhar_card', 'Aadhar Card'),
         ('visa', 'Visa'),
         ('employment_contract', 'Employment Contract'),
         ('offer_letter', 'Offer Letter'),
-        ('experience_certificate', 'Experience Certificate'),
+        ('appointment_letter', 'Appointment Letter'),
+        ('experience_certificate', 'Experience Letter'),
+        ('relieving_letter', 'Relieving Letter'),
         ('educational_certificate', 'Educational Certificate'),
+        ('degree_certificate', 'Degree Certificate'),
+        ('marksheet', 'Marksheet'),
         ('medical_certificate', 'Medical Certificate'),
         ('insurance', 'Insurance Document'),
+        ('bank_account_details', 'Bank Account Details'),
+        ('cancelled_cheque', 'Cancelled Cheque'),
+        ('salary_slip', 'Salary Slip'),
+        ('background_verification', 'Background Verification'),
         ('nda', 'NDA'),
         ('other', 'Other'),
     ]
@@ -335,7 +345,11 @@ class EmployeeDocument(models.Model):
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='uploaded_hr_documents',
     )
-    # Not part of the original spec — tracks whether the "expiring in 30 days" email (see
+    verified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='verified_hr_documents',
+    )
+    verified_at = models.DateTimeField(null=True, blank=True)
+    # Not part of the original spec — tracks whether the "expiring soon" email (see
     # apps.hr.views._send_document_expiring_email) has already gone out for this document,
     # so re-saving it (e.g. an admin editing notes) doesn't re-send the same alert.
     expiry_notified = models.BooleanField(default=False)

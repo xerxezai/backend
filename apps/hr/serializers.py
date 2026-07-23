@@ -198,8 +198,10 @@ class PerformanceReviewSerializer(serializers.ModelSerializer):
 
 class EmployeeDocumentSerializer(serializers.ModelSerializer):
     employee_name = serializers.CharField(source='employee.full_name', read_only=True)
+    employee_code = serializers.CharField(source='employee.code', read_only=True)
     doc_type_label = serializers.CharField(source='get_doc_type_display', read_only=True)
     uploaded_by_username = serializers.CharField(source='uploaded_by.username', read_only=True, default=None)
+    verified_by_username = serializers.CharField(source='verified_by.username', read_only=True, default=None)
     file_url = serializers.SerializerMethodField()
     days_until_expiry = serializers.SerializerMethodField()
     is_expired = serializers.SerializerMethodField()
@@ -208,7 +210,7 @@ class EmployeeDocumentSerializer(serializers.ModelSerializer):
     class Meta:
         model = EmployeeDocument
         fields = '__all__'
-        read_only_fields = ['employee', 'uploaded_at', 'uploaded_by', 'expiry_notified']
+        read_only_fields = ['employee', 'uploaded_at', 'uploaded_by', 'expiry_notified', 'verified_by', 'verified_at', 'is_verified']
 
     def get_file_url(self, obj):
         if not obj.file:

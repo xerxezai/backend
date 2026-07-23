@@ -99,11 +99,40 @@ Your {leave.get_type_display()} leave request from {leave.from_date} to {leave.t
 
 
 DOCUMENT_EXPIRY_NOTIFY_EMAIL = 'xerxez.in@gmail.com'
+DOCUMENT_EXPIRY_NOTIFY_DAYS = 7
+
+
+def _hr_recipient_emails(company):
+    """Who 'notify HR' actually means for a given company: its Company Admin(s) and HR
+    Manager(s) (module_admin on 'hr'), not a single hardcoded inbox — this system is
+    multi-tenant, so different companies have different HR staff. Falls back to the shared
+    monitoring address if a company has nobody in either role yet (or has no company at all),
+    so an alert is never silently dropped."""
+    if not company:
+        return [DOCUMENT_EXPIRY_NOTIFY_EMAIL]
+    from apps.companies.models import CompanyUser
+    from apps.rbac.models import UserModuleAccess
+
+    admin_user_ids = set(
+        CompanyUser.objects.filter(company=company, is_active=True, role='company_admin').values_list('user_id', flat=True),
+    )
+    hr_manager_user_ids = set(
+        UserModuleAccess.objects.filter(
+            module__name='hr', role='module_admin', is_active=True,
+            user__company_memberships__company=company, user__company_memberships__is_active=True,
+        ).values_list('user_id', flat=True),
+    )
+    User = get_user_model()
+    emails = list(
+        User.objects.filter(id__in=admin_user_ids | hr_manager_user_ids).exclude(email='').values_list('email', flat=True),
+    )
+    return emails or [DOCUMENT_EXPIRY_NOTIFY_EMAIL]
 
 
 def _send_document_expiring_email(document):
     days = (document.expiry_date - date.today()).days
     subject = f"Document Expiring Soon — {document.employee.full_name} — {document.get_doc_type_display()}"
+    recipients = _hr_recipient_emails(document.company)
 
     plain = f"""
 Document {document.name} for employee {document.employee.full_name} expires on {document.expiry_date.strftime('%d %b %Y')} — {days} day(s) remaining.
@@ -150,20 +179,21 @@ Document {document.name} for employee {document.employee.full_name} expires on {
 </body>
 </html>"""
 
-    send_via_resend(to=DOCUMENT_EXPIRY_NOTIFY_EMAIL, subject=subject, html=html, text=plain, from_email=FROM_EMAIL)
+    send_via_resend(to=recipients, subject=subject, html=html, text=plain, from_email=FROM_EMAIL)
 
 
 def _maybe_notify_document_expiring(document):
-    """Sends the 'expiring in 30 days' alert the moment a document is saved with an expiry
-    date that already falls inside that window (covers uploading/editing a document that's
+    """Sends the 'expiring soon' alert to HR (the company's Company Admin/HR Manager, see
+    _hr_recipient_emails) the moment a document is saved with an expiry date that already
+    falls within DOCUMENT_EXPIRY_NOTIFY_DAYS (covers uploading/editing a document that's
     already close to expiry). `expiry_notified` prevents re-sending on every later edit.
-    A document that drifts into the 30-day window purely by the calendar moving forward
-    (nobody re-saves it) needs a scheduled check instead — see the check_expiring_documents
+    A document that drifts into that window purely by the calendar moving forward (nobody
+    re-saves it) needs a scheduled check instead — see the check_expiring_documents
     management command."""
     if document.expiry_notified or not document.expiry_date:
         return
     days = (document.expiry_date - date.today()).days
-    if 0 <= days <= 30:
+    if 0 <= days <= DOCUMENT_EXPIRY_NOTIFY_DAYS:
         _send_document_expiring_email(document)
         document.expiry_notified = True
         document.save(update_fields=['expiry_notified'])
@@ -1181,9 +1211,13 @@ class EmployeeDocumentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         _maybe_notify_document_expiring(instance)
 
     def perform_destroy(self, instance):
-        if not _is_super_or_company_admin(self.request.user):
+        # Super Admin, Company Admin, and HR Manager can all delete documents — only a
+        # Regular User / Read Only account is barred (matches _is_hr_privileged everywhere
+        # else in this file; documents are NOT on the stricter Admin-only bar that
+        # Overtime/Leave delete use, per the explicit role spec for this module).
+        if not _is_hr_privileged(self.request.user):
             from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied('Only Admin can delete documents.')
+            raise PermissionDenied('Only Company Admin or HR Manager can delete documents.')
         super().perform_destroy(instance)
 
     @action(detail=True, methods=['patch'], url_path='verify')
@@ -1192,7 +1226,9 @@ class EmployeeDocumentViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
             return Response({'detail': 'Only Company Admin or HR Manager can verify documents.'}, status=status.HTTP_403_FORBIDDEN)
         doc = self.get_object()
         doc.is_verified = True
-        doc.save(update_fields=['is_verified'])
+        doc.verified_by = request.user
+        doc.verified_at = timezone.now()
+        doc.save(update_fields=['is_verified', 'verified_by', 'verified_at'])
         return Response(EmployeeDocumentSerializer(doc, context={'request': request}).data)
 
     @action(detail=False, methods=['get'], url_path='stats')
