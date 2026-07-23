@@ -231,9 +231,22 @@ class ExitManagementSerializer(serializers.ModelSerializer):
 
 
 class HolidaySerializer(serializers.ModelSerializer):
+    next_occurrence = serializers.SerializerMethodField()
+    days_until = serializers.SerializerMethodField()
+    day_name = serializers.SerializerMethodField()
+
     class Meta:
         model = Holiday
         fields = '__all__'
+
+    def get_next_occurrence(self, obj):
+        return obj.next_occurrence()
+
+    def get_days_until(self, obj):
+        return (obj.next_occurrence() - date.today()).days
+
+    def get_day_name(self, obj):
+        return obj.next_occurrence().strftime('%A')
 
 
 class OvertimeSerializer(serializers.ModelSerializer):

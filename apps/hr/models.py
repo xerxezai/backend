@@ -1,4 +1,5 @@
 """HR models: departments, employees, attendance, leave, shifts, payroll."""
+from datetime import date
 from django.conf import settings
 from django.db import models
 
@@ -387,11 +388,30 @@ class Holiday(models.Model):
     date = models.DateField()
     holiday_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='public')
     description = models.TextField(blank=True)
+    is_recurring = models.BooleanField(default=False, help_text='Automatically applies every year on this same month/day.')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'hr_holiday'
         ordering = ['date']
+
+    def effective_date_for_year(self, year):
+        """This holiday's month/day projected onto `year` — Feb 29 falls back to Feb 28
+        in a non-leap year rather than raising."""
+        try:
+            return self.date.replace(year=year)
+        except ValueError:
+            return date(year, 2, 28)
+
+    def next_occurrence(self, today=None):
+        """The next date this holiday falls on. Non-recurring holidays just occur once,
+        on their stored date (which may already be in the past). Recurring holidays project
+        onto the current year, rolling over to next year once that date has passed."""
+        today = today or date.today()
+        if not self.is_recurring:
+            return self.date
+        this_year = self.effective_date_for_year(today.year)
+        return this_year if this_year >= today else self.effective_date_for_year(today.year + 1)
 
     def __str__(self):
         return f'{self.name} — {self.date}'

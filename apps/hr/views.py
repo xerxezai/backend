@@ -1068,6 +1068,93 @@ class ExitManagementViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
 # New: Holidays, Overtime
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Curated fixed-calendar-date public holidays only (New Year's Day, national days, Christmas,
+# etc.) for the "Import Public Holidays" bulk action. Deliberately excludes movable/lunar
+# holidays (Eid, Diwali, Easter, ...) — this backend has no external calendar data source to
+# compute those correctly for an arbitrary year, and a wrong guess is worse than an omission.
+COUNTRY_PUBLIC_HOLIDAYS = {
+    'india': [
+        ('Republic Day', 1, 26),
+        ('Labour Day', 5, 1),
+        ('Independence Day', 8, 15),
+        ('Gandhi Jayanti', 10, 2),
+        ('Christmas', 12, 25),
+    ],
+    'uae': [
+        ("New Year's Day", 1, 1),
+        ('Commemoration Day', 12, 1),
+        ('UAE National Day', 12, 2),
+    ],
+    'saudi_arabia': [
+        ('Founding Day', 2, 22),
+        ('Saudi National Day', 9, 23),
+    ],
+    'uk': [
+        ("New Year's Day", 1, 1),
+        ('Christmas Day', 12, 25),
+        ('Boxing Day', 12, 26),
+    ],
+}
+
+
+def _send_holiday_added_email(holiday, employee):
+    if not employee.email:
+        return
+    subject = f"New Holiday Added — {holiday.name} on {holiday.date.strftime('%d %b %Y')}"
+    type_label = holiday.get_holiday_type_display()
+
+    plain = f"""
+Dear {employee.full_name},
+
+A new holiday has been added to the company calendar.
+
+Holiday: {holiday.name}
+Date: {holiday.date.strftime('%A, %d %B %Y')}
+Type: {type_label}
+{f"Note: {holiday.description}" if holiday.description else ""}
+
+— XERXEZ HR
+""".strip()
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8">
+<style>
+  body{{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;padding:0}}
+  .wrap{{max-width:560px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;
+         box-shadow:0 4px 32px rgba(0,0,0,.10)}}
+  .hdr{{background:linear-gradient(135deg,#1a1208 0%,#0f0a05 100%);padding:36px 44px;text-align:center}}
+  .hdr h1{{color:#C9883A;font-family:Georgia,serif;font-size:24px;margin:0 0 6px}}
+  .hdr p{{color:rgba(255,255,255,.42);font-size:13px;margin:0}}
+  .body{{padding:36px 44px}}
+  table{{width:100%;border-collapse:collapse}}
+  tr:nth-child(even) td{{background:#fafaf8}}
+  td{{padding:12px 14px;font-size:14px;color:#333;vertical-align:top;border-bottom:1px solid #f0ede8}}
+  td:first-child{{width:38%;font-weight:700;color:#5a5650;font-size:11px;text-transform:uppercase;letter-spacing:.09em}}
+  .ftr{{background:#F8F7F4;border-top:1px solid #e8e4de;padding:18px 44px;
+        text-align:center;font-size:12px;color:#9b9690}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr"><h1>XERXEZ</h1><p>New Holiday Added</p></div>
+  <div class="body">
+    <p>Dear {employee.full_name},</p>
+    <p>A new holiday has been added to the company calendar.</p>
+    <table>
+      <tr><td>Holiday</td> <td>{holiday.name}</td></tr>
+      <tr><td>Date</td>    <td>{holiday.date.strftime('%A, %d %B %Y')}</td></tr>
+      <tr><td>Type</td>    <td>{type_label}</td></tr>
+    </table>
+  </div>
+  <div class="ftr">XERXEZ HR &nbsp;·&nbsp; xerxez.com</div>
+</div>
+</body>
+</html>"""
+
+    send_via_resend(to=employee.email, subject=subject, html=html, text=plain, from_email=FROM_EMAIL)
+
+
 class HolidayViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = Holiday.objects.all()
     serializer_class = HolidaySerializer
@@ -1078,6 +1165,13 @@ class HolidayViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     filterset_fields = ['holiday_type']
     ordering_fields = ['date']
 
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        holiday = serializer.instance
+        employees = Employee.objects.filter(company=holiday.company, status='active').exclude(email='')
+        for employee in employees:
+            _send_holiday_added_email(holiday, employee)
+
     @action(detail=False, methods=['get'], url_path='upcoming')
     def upcoming(self, request):
         """GET /hr/holidays/upcoming/?limit= — next N holidays from today, for the HR
@@ -1085,6 +1179,53 @@ class HolidayViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         limit = int(request.query_params.get('limit', 5))
         qs = self.get_queryset().filter(date__gte=date.today()).order_by('date')[:limit]
         return Response(HolidaySerializer(qs, many=True).data)
+
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        """GET /hr/holidays/stats/ — counts for the stat cards at the top of the Holidays
+        page. Recurring holidays are projected onto the current year (their stored `date`
+        may be from whichever year they were first added)."""
+        today = date.today()
+        window_end = today + timedelta(days=30)
+        total_this_year = 0
+        public_this_year = 0
+        upcoming_30_days = 0
+        for h in self.get_queryset():
+            this_year_date = h.effective_date_for_year(today.year) if h.is_recurring else (h.date if h.date.year == today.year else None)
+            if this_year_date:
+                total_this_year += 1
+                if h.holiday_type == 'public':
+                    public_this_year += 1
+            next_occurrence = h.next_occurrence(today)
+            if today <= next_occurrence <= window_end:
+                upcoming_30_days += 1
+        return Response({
+            'total_this_year': total_this_year,
+            'upcoming_30_days': upcoming_30_days,
+            'public_this_year': public_this_year,
+        })
+
+    @action(detail=False, methods=['post'], url_path='bulk-import')
+    def bulk_import(self, request):
+        """POST /hr/holidays/bulk-import/ {country, year?} — adds the curated fixed-date
+        public holidays for that country. Admin/HR Manager only."""
+        if not _is_hr_privileged(request.user):
+            return Response({'detail': 'Only Company Admin or HR Manager can import holidays.'}, status=status.HTTP_403_FORBIDDEN)
+        country = request.data.get('country')
+        entries = COUNTRY_PUBLIC_HOLIDAYS.get(country)
+        if not entries:
+            return Response({'detail': 'Unknown country.'}, status=status.HTTP_400_BAD_REQUEST)
+        year = int(request.data.get('year') or date.today().year)
+        company, _is_platform_admin = self._company_context()
+        created = []
+        for name, month, day in entries:
+            obj, was_created = Holiday.objects.get_or_create(
+                company=company, name=name, date=date(year, month, day),
+                defaults={'holiday_type': 'public'},
+            )
+            if was_created:
+                created.append(HolidaySerializer(obj).data)
+        return Response({'created': created, 'count': len(created)})
 
 
 class OvertimeViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
