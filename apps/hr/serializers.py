@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 from .models import (
-    Department, Employee, Attendance, LeaveRequest, Shift, SalaryStructure, Payroll, PaySlip,
+    Department, Employee, Attendance, LeaveRequest, LeavePolicy, Shift, SalaryStructure, Payroll, PaySlip,
     PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement, Holiday, Overtime,
 )
 
@@ -102,6 +102,15 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'to_date': 'To date must be on or after the from date.'})
             attrs['days'] = (to_date - from_date).days + 1
         return attrs
+
+
+class LeavePolicySerializer(serializers.ModelSerializer):
+    leave_type_display = serializers.CharField(source='get_leave_type_display', read_only=True)
+
+    class Meta:
+        model = LeavePolicy
+        fields = '__all__'
+        read_only_fields = ['company']
 
 
 class ShiftSerializer(serializers.ModelSerializer):

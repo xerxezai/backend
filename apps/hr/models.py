@@ -142,6 +142,43 @@ class LeaveRequest(models.Model):
         ordering = ['-created_at']
 
 
+class LeavePolicy(models.Model):
+    """Per-company, per-leave-type policy: how many days are allowed per year, and whether
+    unused days carry forward. Drives LeaveRequestViewSet.balance() instead of a hardcoded
+    allowance — see apps.hr.views.LEAVE_ANNUAL_ALLOWANCE (removed)."""
+    company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='leave_policies')
+    leave_type = models.CharField(max_length=20, choices=LeaveRequest.TYPE)
+    days_allowed = models.IntegerField(default=0)
+    carry_forward = models.BooleanField(default=False)
+    max_carry_forward_days = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'hr_leavepolicy'
+        unique_together = ['company', 'leave_type']
+        ordering = ['leave_type']
+
+    def __str__(self):
+        return f'{self.company} — {self.get_leave_type_display()}'
+
+
+# Seeded onto every new company (CompanyListView.post) and backfilled onto any company that
+# predates this feature (see management command backfill_leave_policies) — Company Admin can
+# then edit these to match their actual policy. Unpaid Leave is intentionally uncapped (see
+# LeaveRequestViewSet.balance): its days_allowed=0 row exists only so it's visible/editable
+# on the Leave Policy page, it is never used to cap a balance.
+DEFAULT_LEAVE_POLICIES = [
+    ('annual', 21), ('sick', 10), ('emergency', 5),
+    ('maternity', 90), ('paternity', 7), ('unpaid', 0),
+]
+
+
+def create_default_leave_policies(company):
+    for leave_type, days in DEFAULT_LEAVE_POLICIES:
+        LeavePolicy.objects.get_or_create(company=company, leave_type=leave_type, defaults={'days_allowed': days})
+
+
 class Shift(models.Model):
     company = models.ForeignKey(
         'companies.Company', on_delete=models.CASCADE, null=True, blank=True,

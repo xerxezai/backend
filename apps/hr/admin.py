@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import (Attendance, Department, Employee, LeaveRequest, PaySlip,
+from .models import (Attendance, Department, Employee, LeaveRequest, LeavePolicy, PaySlip,
                      Payroll, SalaryStructure, Shift, Holiday, Overtime)
 
 
@@ -31,6 +31,13 @@ class LeaveRequestAdmin(admin.ModelAdmin):
     list_display = ('employee', 'type', 'from_date', 'to_date', 'days', 'status', 'decided_by')
     list_filter = ('status', 'type')
     autocomplete_fields = ('employee', 'decided_by')
+
+
+@admin.register(LeavePolicy)
+class LeavePolicyAdmin(admin.ModelAdmin):
+    list_display = ('company', 'leave_type', 'days_allowed', 'carry_forward', 'max_carry_forward_days', 'is_active')
+    list_filter = ('leave_type', 'is_active', 'carry_forward')
+    autocomplete_fields = ('company',)
 
 
 @admin.register(Shift)

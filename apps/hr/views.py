@@ -19,12 +19,12 @@ from apps.rbac.mixins import RBACScopedMixin
 from apps.rbac.permissions import ReadOnlyOrHigher
 from apps.rbac.utils import get_user_role
 from apps.companies.mixins import CompanyScopedMixin
-from .models import (Attendance, Department, Employee, LeaveRequest, PaySlip,
+from .models import (Attendance, Department, Employee, LeaveRequest, LeavePolicy, PaySlip,
                      Payroll, SalaryStructure, Shift,
                      PerformanceReview, EmployeeDocument, OnboardingChecklist, ExitManagement,
                      Holiday, Overtime)
 from .serializers import (AttendanceSerializer, DepartmentSerializer,
-                          EmployeeSerializer, LeaveRequestSerializer,
+                          EmployeeSerializer, LeaveRequestSerializer, LeavePolicySerializer,
                           PaySlipSerializer, PayrollSerializer,
                           SalaryStructureSerializer, ShiftSerializer,
                           PerformanceReviewSerializer, EmployeeDocumentSerializer,
@@ -605,14 +605,6 @@ class AttendanceViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         return Response(list(buckets.values()))
 
 
-LEAVE_ANNUAL_ALLOWANCE = {
-    'annual': 21,
-    'sick': 12,
-    'emergency': 5,
-    # unpaid / maternity / paternity / other are uncapped — handled case-by-case, not a pooled allowance.
-}
-
-
 class LeaveRequestViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     queryset = LeaveRequest.objects.select_related('employee', 'decided_by').all()
     serializer_class = LeaveRequestSerializer
@@ -691,10 +683,53 @@ class LeaveRequestViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
         ).aggregate(total=Sum('days'))['total'] or 0
         used = float(used)
 
-        allowance = LEAVE_ANNUAL_ALLOWANCE.get(leave_type)
-        if allowance is None:
-            return Response({'leave_type': leave_type, 'unlimited': True, 'allowance': None, 'used': used, 'remaining': None})
-        return Response({'leave_type': leave_type, 'unlimited': False, 'allowance': allowance, 'used': used, 'remaining': max(allowance - used, 0)})
+        # Unpaid leave is intentionally always uncapped — its LeavePolicy row (days_allowed=0)
+        # exists only so it's visible/editable on the Leave Policy page, never to cap a balance.
+        if leave_type == 'unpaid':
+            return Response({'leave_type': leave_type, 'unlimited': True, 'no_policy': False, 'allowance': None, 'used': used, 'remaining': None})
+
+        employee = Employee.objects.filter(id=employee_id).select_related('company').first()
+        policy = (
+            LeavePolicy.objects.filter(company=employee.company, leave_type=leave_type, is_active=True).first()
+            if employee and employee.company_id else None
+        )
+        if not policy:
+            return Response({
+                'leave_type': leave_type, 'unlimited': False, 'no_policy': True,
+                'allowance': None, 'used': used, 'remaining': None,
+                'detail': 'Leave policy not configured — contact HR',
+            })
+        allowance = policy.days_allowed
+        return Response({'leave_type': leave_type, 'unlimited': False, 'no_policy': False, 'allowance': allowance, 'used': used, 'remaining': max(allowance - used, 0)})
+
+
+class LeavePolicyViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
+    """Per-company leave policy configuration — days allowed per leave type, carry-forward
+    rules. Company Admin/HR Manager/Super Admin can edit; everyone else can only read (their
+    own company's policies), e.g. to show the correct balance on the Add Leave Request form."""
+    queryset = LeavePolicy.objects.select_related('company').all()
+    serializer_class = LeavePolicySerializer
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['leave_type', 'is_active']
+
+    def _require_privileged(self):
+        if not _is_hr_privileged(self.request.user):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Admin only.')
+
+    def perform_create(self, serializer):
+        self._require_privileged()
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._require_privileged()
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        self._require_privileged()
+        super().perform_destroy(instance)
 
 
 class ShiftViewSet(CompanyScopedMixin, viewsets.ModelViewSet):

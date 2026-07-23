@@ -45,7 +45,9 @@ class CompanyListView(APIView):
             data['slug'] = _unique_slug(data.get('name', ''))
         serializer = CompanySerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            company = serializer.save()
+            from apps.hr.models import create_default_leave_policies
+            create_default_leave_policies(company)
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
