@@ -99,17 +99,31 @@ Your {leave.get_type_display()} leave request from {leave.from_date} to {leave.t
 
 
 def _is_hr_privileged(user):
-    """Super Admin / Admin (Django is_staff or is_superuser) / HR Manager (RBAC module_admin
-    scoped to the 'hr' module) — the roles that see and manage every employee's attendance,
-    leave and payroll data. Everyone else only sees records for their own linked Employee.
+    """Super Admin / Admin (Django is_staff or is_superuser) / Company Admin / HR Manager
+    (RBAC module_admin scoped to the 'hr' module) — the roles that see and manage every
+    employee's attendance, leave and payroll data. Everyone else only sees records for their
+    own linked Employee.
 
-    HR Manager is deliberately NOT scoped down to "records they created" the way
+    Company Admin is checked via get_user_role(user) with NO module argument (their highest
+    role across *any* module) rather than get_user_role(user, 'hr') — a Company Admin's
+    authority spans every module and was never meant to depend on whether a UserModuleAccess
+    row for 'hr' specifically exists. That row can go missing (an Edit Access edit that didn't
+    re-include 'hr', or any account whose per-module grants are simply incomplete), which
+    silently downgraded a real Company Admin to "sees only their own record" everywhere in
+    this file. Same reasoning apps.rbac.mixins.RBACScopedMixin.rbac_scope() already documents
+    for the identical check.
+
+    HR Manager (module_admin) stays scoped to the 'hr' module specifically — that distinction
+    is meaningful (someone can be module_admin for crm without being an HR Manager) — and is
+    deliberately NOT scoped down to "records they created" the way
     apps.rbac.utils.filter_queryset_by_role treats module_admin for other modules — an HR
     Manager needs company-wide HR visibility, so this is a bespoke check rather than a reuse
     of RBACScopedMixin."""
     if user.is_staff or user.is_superuser:
         return True
-    return get_user_role(user, 'hr') in ('super_admin', 'company_admin', 'module_admin')
+    if get_user_role(user) == 'company_admin':
+        return True
+    return get_user_role(user, 'hr') in ('super_admin', 'module_admin')
 
 
 def _own_employee_or_none(request):
@@ -190,13 +204,43 @@ class EmployeeViewSet(RBACScopedMixin, viewsets.ModelViewSet):
             return Response({'detail': 'No employee profile linked to your account.'}, status=status.HTTP_404_NOT_FOUND)
         return Response(EmployeeSerializer(employee, context={'request': request}).data)
 
+    @action(detail=False, methods=['get'], url_path='hr-contact')
+    def hr_contact(self, request):
+        """GET /hr/employees/hr-contact/ — best available "who to contact" email, for the
+        "Contact HR" button shown when a user has no Employee profile yet (so _own_employee_or_none
+        can't resolve anything, including their company — CompanyUser membership is used
+        instead, which exists independently of an Employee record). Falls back through: an
+        active Company Admin's email, the company's general contact email, then XERXEZ support."""
+        from apps.companies.utils import resolve_company
+        from apps.companies.models import CompanyUser
+        company, _is_platform_admin = resolve_company(request)
+        if not company:
+            return Response({'email': 'info@xerxez.com', 'label': 'XERXEZ Support'})
+        admin_cu = CompanyUser.objects.filter(
+            company=company, role='company_admin', is_active=True, user__email__gt='',
+        ).select_related('user').first()
+        if admin_cu:
+            return Response({'email': admin_cu.user.email, 'label': 'Company Admin'})
+        if company.email:
+            return Response({'email': company.email, 'label': company.name})
+        return Response({'email': 'info@xerxez.com', 'label': 'XERXEZ Support'})
+
     @action(detail=False, methods=['get'], url_path='linkable-users')
     def linkable_users(self, request):
-        if not request.user.is_staff:
+        if not _is_hr_privileged(request.user):
             return Response({'detail': 'Admin access required.'}, status=status.HTTP_403_FORBIDDEN)
         User = get_user_model()
-        users = User.objects.order_by('username').values('id', 'username', 'email', 'first_name', 'last_name')
-        return Response(list(users))
+        users = User.objects.order_by('username')
+        # Platform admin (super_admin) sees every user across every company; Company Admin /
+        # HR Manager only see users within their own company, so they can't link an Employee
+        # to someone outside their own tenant.
+        from apps.companies.utils import resolve_company
+        company, is_platform_admin = resolve_company(request)
+        if not is_platform_admin and company:
+            from apps.companies.models import CompanyUser
+            user_ids = CompanyUser.objects.filter(company=company, is_active=True).values_list('user_id', flat=True)
+            users = users.filter(id__in=user_ids)
+        return Response(list(users.values('id', 'username', 'email', 'first_name', 'last_name')))
 
     @action(detail=True, methods=['get', 'post'], url_path='documents',
             parser_classes=[MultiPartParser, FormParser])
@@ -940,13 +984,26 @@ class OvertimeViewSet(CompanyScopedMixin, viewsets.ModelViewSet):
     filterset_fields = ['employee', 'status', 'rate']
     ordering_fields = ['date']
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if not _is_hr_privileged(self.request.user):
+            employee = _own_employee_or_none(self.request)
+            return qs.filter(employee=employee) if employee else qs.none()
+        return qs
+
     def perform_create(self, serializer):
         employee = serializer.validated_data.get('employee')
-        serializer.save(company=employee.company if employee else None)
+        if not _is_hr_privileged(self.request.user):
+            # Regular employees can only log overtime for themselves.
+            employee = _own_employee_or_none(self.request)
+            if not employee:
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied('No employee profile linked to your account.')
+        serializer.save(employee=employee, company=employee.company if employee else None)
 
     @action(detail=True, methods=['patch'], url_path='approve')
     def approve(self, request, pk=None):
-        if not request.user.is_staff:
+        if not _is_hr_privileged(request.user):
             return Response({'detail': 'Admin only.'}, status=status.HTTP_403_FORBIDDEN)
         overtime = self.get_object()
         action_val = request.data.get('action', 'approved')
