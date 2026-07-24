@@ -12,10 +12,10 @@ from .serializers import CareerApplicationSerializer
 
 logger = logging.getLogger(__name__)
 
-ADMIN_EMAIL = 'xerxez.in@gmail.com'
+ADMIN_EMAIL = 'info@xerxez.com'
 # TEMPORARY: xerxez.com is not yet verified in Resend, so sends must use
 # Resend's shared onboarding@resend.dev sender until domain verification
-# completes. Switch to CONTACT_FROM_EMAIL (xerxez.in@gmail.com) once verified.
+# completes. Switch to CONTACT_FROM_EMAIL (info@xerxez.com) once verified.
 FROM_EMAIL = 'onboarding@resend.dev'
 
 OPEN_POSITIONS = [

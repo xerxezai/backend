@@ -50,7 +50,7 @@ class ChatbotMessageView(APIView):
         if not api_key:
             logger.error("GROQ_API_KEY is not configured")
             return Response(
-                {'reply': "I'm temporarily unavailable. Please reach us at xerxez.in@gmail.com or via xerxez.com/contact."},
+                {'reply': "I'm temporarily unavailable. Please reach us at info@xerxez.com or via xerxez.com/contact."},
                 status=status.HTTP_200_OK,
             )
 
@@ -59,7 +59,7 @@ class ChatbotMessageView(APIView):
         except ImportError:
             logger.error("groq package is not installed")
             return Response(
-                {'reply': "I'm temporarily unavailable. Please reach us at xerxez.in@gmail.com or via xerxez.com/contact."},
+                {'reply': "I'm temporarily unavailable. Please reach us at info@xerxez.com or via xerxez.com/contact."},
                 status=status.HTTP_200_OK,
             )
 
@@ -84,7 +84,7 @@ class ChatbotMessageView(APIView):
         except Exception as exc:
             logger.error("Groq API call failed: %s", exc, exc_info=True)
             return Response(
-                {'reply': "I'm having trouble responding right now. Please reach us at xerxez.in@gmail.com or via xerxez.com/contact."},
+                {'reply': "I'm having trouble responding right now. Please reach us at info@xerxez.com or via xerxez.com/contact."},
                 status=status.HTTP_200_OK,
             )
 

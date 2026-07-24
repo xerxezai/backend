@@ -244,12 +244,12 @@ EMAIL_USE_TLS = backend_config.get('integrations.email.use_tls')
 EMAIL_HOST_USER = backend_config.get('integrations.email.user')
 EMAIL_HOST_PASSWORD = backend_config.get('integrations.email.password')
 EMAIL_TIMEOUT = 8  # seconds — prevents send_mail from blocking indefinitely
-DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or 'xerxez.in@gmail.com'
-CONTACT_ADMIN_EMAIL = os.getenv('CONTACT_ADMIN_EMAIL', 'xerxez.in@gmail.com')
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or 'info@xerxez.com'
+CONTACT_ADMIN_EMAIL = os.getenv('CONTACT_ADMIN_EMAIL', 'info@xerxez.com')
 
 # Resend — used for contact form notification + auto-reply emails
 RESEND_API_KEY = os.getenv('RESEND_API_KEY', '')
-CONTACT_FROM_EMAIL = os.getenv('CONTACT_FROM_EMAIL', 'xerxez.in@gmail.com')
+CONTACT_FROM_EMAIL = os.getenv('CONTACT_FROM_EMAIL', 'info@xerxez.com')
 
 # Cache configuration
 CACHES = {

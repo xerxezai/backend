@@ -1,4 +1,4 @@
-"""Emails a daily attendance summary to xerxez.in@gmail.com.
+"""Emails a daily attendance summary to info@xerxez.com.
 
 Nothing in this Django deployment schedules jobs on its own — there's no Celery/beat,
 APScheduler, or django-crontab installed, and the Procfile runs a single `web` gunicorn
@@ -18,14 +18,14 @@ from django.core.management.base import BaseCommand
 from apps.core.email import send_via_resend
 from apps.hr.models import Attendance, Employee
 
-REPORT_EMAIL = 'xerxez.in@gmail.com'
+REPORT_EMAIL = 'info@xerxez.com'
 # TEMPORARY: xerxez.com is not yet verified in Resend — see apps.contact.views for the
 # same note; switch to a verified xerxez.com sender once domain verification completes.
 FROM_EMAIL = 'onboarding@resend.dev'
 
 
 class Command(BaseCommand):
-    help = "Emails today's attendance summary (present/absent/late/half-day + absentee list) to xerxez.in@gmail.com."
+    help = "Emails today's attendance summary (present/absent/late/half-day + absentee list) to info@xerxez.com."
 
     def handle(self, *args, **options):
         today = date.today()

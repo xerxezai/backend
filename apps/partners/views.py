@@ -18,7 +18,7 @@ from .serializers import PartnerApplySerializer, PartnerSerializer, PartnerDealS
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
-ADMIN_EMAIL = 'xerxez.in@gmail.com'
+ADMIN_EMAIL = 'info@xerxez.com'
 # TEMPORARY: xerxez.com is not yet verified in Resend — see apps.contact.views for the
 # same note; switch to a verified xerxez.com sender once domain verification completes.
 FROM_EMAIL = 'onboarding@resend.dev'
@@ -106,7 +106,7 @@ We'll contact you at {p.email} with next steps.
 
 Best regards,
 The XERXEZ Team
-xerxez.in@gmail.com | xerxez.com
+info@xerxez.com | xerxez.com
 """.strip()
     html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 body{{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;padding:0}}
@@ -123,7 +123,7 @@ body{{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;paddin
 your application and our team will review it within <strong>48 hours</strong>.</p>
 <p>We'll contact you at <strong>{p.email}</strong> with next steps.</p>
 <p>Best regards,<br><strong>The XERXEZ Team</strong></p></div>
-<div class="ftr">XERXEZ &nbsp;·&nbsp; xerxez.in@gmail.com &nbsp;·&nbsp; xerxez.com</div>
+<div class="ftr">XERXEZ &nbsp;·&nbsp; info@xerxez.com &nbsp;·&nbsp; xerxez.com</div>
 </div></body></html>"""
     return plain, html
 

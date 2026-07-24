@@ -100,7 +100,7 @@ Your {leave.get_type_display()} leave request from {leave.from_date} to {leave.t
     send_via_resend(to=leave.employee.email, subject=subject, html=html, text=plain, from_email=FROM_EMAIL)
 
 
-DOCUMENT_EXPIRY_NOTIFY_EMAIL = 'xerxez.in@gmail.com'
+DOCUMENT_EXPIRY_NOTIFY_EMAIL = 'info@xerxez.com'
 DOCUMENT_EXPIRY_NOTIFY_DAYS = 7
 
 

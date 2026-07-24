@@ -32,7 +32,7 @@ def _send_safe(subject, message, recipient_list):
     if not recipient_list:
         return
     try:
-        from_email = getattr(django_settings, 'DEFAULT_FROM_EMAIL', 'xerxez.in@gmail.com')
+        from_email = getattr(django_settings, 'DEFAULT_FROM_EMAIL', 'info@xerxez.com')
         send_mail(subject, message, from_email, recipient_list, fail_silently=True)
     except Exception as exc:
         logger.warning('Document email failed: %s', exc)
