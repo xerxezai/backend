@@ -228,6 +228,16 @@ CORS_ALLOWED_ORIGINS = backend_config.get('api.cors.allowed_origins')
 CORS_ALLOW_CREDENTIALS = backend_config.get('api.cors.allow_credentials')
 CORS_PREFLIGHT_MAX_AGE = backend_config.get('api.cors.max_age')
 
+# The ERP Company Switcher sends this custom header on every request (see
+# frontend src/hooks/useERPApi.ts erpFetch) — without it in the allowlist,
+# django-cors-headers' default header list rejects the preflight and every
+# ERP request fails in the browser with "Failed to fetch".
+from corsheaders.defaults import default_headers
+
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'x-active-company-id',
+]
+
 # CSRF configuration
 CSRF_TRUSTED_ORIGINS = backend_config.get('security.csrf.trusted_origins')
 
