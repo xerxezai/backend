@@ -11,6 +11,8 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.core.email import send_via_resend
+from apps.core.throttles import LoginRateThrottle
+from apps.core.audit import log_audit_event
 from apps.rbac.views import IsSuperAdmin
 from .models import Partner, PartnerDeal, COMMISSION_RATES, generate_partner_code
 from .serializers import PartnerApplySerializer, PartnerSerializer, PartnerDealSerializer
@@ -293,6 +295,7 @@ class PartnerApplyView(APIView):
 class PartnerLoginView(APIView):
     """POST /api/v1/partners/login/ — {email, password} -> JWT access/refresh + partner profile."""
     permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         email = (request.data.get('email') or '').strip()
@@ -304,10 +307,12 @@ class PartnerLoginView(APIView):
         # this form collects email, so resolve it to the account's username first.
         user_obj = User.objects.filter(email__iexact=email).first()
         if not user_obj:
+            log_audit_event(request, 'login_failure', username=email, source='partner')
             return Response({'error': 'Invalid email or password.'}, status=401)
 
         user = authenticate(request, username=user_obj.username, password=password)
         if not user:
+            log_audit_event(request, 'login_failure', username=email, source='partner')
             return Response({'error': 'Invalid email or password.'}, status=401)
 
         partner = getattr(user, 'partner', None)
@@ -316,6 +321,7 @@ class PartnerLoginView(APIView):
         if partner.status != 'approved':
             return Response({'error': f'Your partner account is {partner.get_status_display().lower()}.'}, status=403)
 
+        log_audit_event(request, 'login_success', username=user.username, source='partner')
         refresh = RefreshToken.for_user(user)
         return Response({
             'access': str(refresh.access_token),

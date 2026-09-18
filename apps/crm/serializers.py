@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from apps.core.serializers import SanitizedModelSerializer
 from .models import Customer, Contact, Lead, Activity, Deal, CustomerNote
 
 
@@ -11,13 +12,13 @@ def _gen_code(model, prefix, pad=4):
         n += 1
 
 
-class ContactInlineSerializer(serializers.ModelSerializer):
+class ContactInlineSerializer(SanitizedModelSerializer):
     class Meta:
         model = Contact
         fields = ['id', 'name', 'role', 'email', 'phone', 'is_primary']
 
 
-class CustomerSerializer(serializers.ModelSerializer):
+class CustomerSerializer(SanitizedModelSerializer):
     code = serializers.CharField(required=False, allow_blank=True)
     contacts = ContactInlineSerializer(many=True, read_only=True)
 
@@ -32,7 +33,7 @@ class CustomerSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
-class ContactSerializer(serializers.ModelSerializer):
+class ContactSerializer(SanitizedModelSerializer):
     customer_name = serializers.CharField(source='customer.name', read_only=True)
 
     class Meta:
@@ -40,7 +41,7 @@ class ContactSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class LeadSerializer(serializers.ModelSerializer):
+class LeadSerializer(SanitizedModelSerializer):
     assigned_to_username = serializers.CharField(source='assigned_to.username', read_only=True)
     customer_name = serializers.CharField(source='customer.name', read_only=True)
 
@@ -50,7 +51,7 @@ class LeadSerializer(serializers.ModelSerializer):
         read_only_fields = ['created_by']
 
 
-class ActivitySerializer(serializers.ModelSerializer):
+class ActivitySerializer(SanitizedModelSerializer):
     user_username = serializers.CharField(source='user.username', read_only=True)
 
     class Meta:
@@ -58,7 +59,7 @@ class ActivitySerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class DealSerializer(serializers.ModelSerializer):
+class DealSerializer(SanitizedModelSerializer):
     customer_name = serializers.CharField(source='customer.name', read_only=True, default=None)
     lead_name = serializers.CharField(source='lead.name', read_only=True, default=None)
     assigned_to_username = serializers.CharField(source='assigned_to.username', read_only=True, default=None)
@@ -90,7 +91,7 @@ class DealStageSerializer(serializers.ModelSerializer):
         fields = ['stage']
 
 
-class CustomerNoteSerializer(serializers.ModelSerializer):
+class CustomerNoteSerializer(SanitizedModelSerializer):
     created_by_username = serializers.CharField(source='created_by.username', read_only=True, default=None)
     created_by_name = serializers.SerializerMethodField()
 

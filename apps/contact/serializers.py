@@ -1,8 +1,9 @@
 from rest_framework import serializers
+from apps.core.serializers import SanitizedModelSerializer
 from .models import ContactMessage
 
 
-class ContactMessageSerializer(serializers.ModelSerializer):
+class ContactMessageSerializer(SanitizedModelSerializer):
     class Meta:
         model = ContactMessage
         fields = '__all__'

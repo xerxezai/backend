@@ -7,26 +7,34 @@ from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.conf import settings as django_settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, Count
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
+
+class IsLMAAdmin(BasePermission):
+    """Gates the LMA admin endpoints (all students / all enrollments) — Django
+    staff or superuser only. Deliberately separate from can_access_instructor:
+    an instructor should not automatically see every student across every
+    other instructor's courses."""
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user and user.is_authenticated and (user.is_staff or user.is_superuser))
+
 from apps.core.email import send_via_resend
 from apps.core.sanitize import clean_text
-
-
-class LoginRateThrottle(AnonRateThrottle):
-    scope = 'login'
+from apps.core.throttles import LoginRateThrottle
+from apps.core.audit import log_audit_event
 
 
 class BecomeInstructorRateThrottle(AnonRateThrottle):
     scope = 'become_instructor'
-from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework_simplejwt.tokens import RefreshToken
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +84,24 @@ def _is_super(profile) -> bool:
     return profile.can_access_instructor and profile.instructor_level == 'super'
 
 
+def _is_instructor_admin(user, profile) -> bool:
+    """True for super instructors (existing instructor_level='super' tier,
+    unchanged) AND the newer is_staff-based 'Instructor Admin' tier — an
+    instructor-role account with is_staff=True. Grants access to the
+    Instructors + Applications ADMIN pages only; Earnings, Pending Reviews
+    and revenue Analytics stay gated by _is_super alone. Requires
+    can_access_instructor so a Student Admin (is_staff=True, lma_role=
+    'student', can_access_instructor=False) can never qualify via is_staff
+    alone."""
+    return _is_super(profile) or (profile.can_access_instructor and user.is_staff)
+
+
 def _lma_token(user):
-    return str(AccessToken.for_user(user))
+    """Issues both an access and a refresh token — same pattern as ERP's
+    LoginView — so the frontend can silently renew a session instead of
+    hard-logging-out every ACCESS_TOKEN_LIFETIME."""
+    refresh = RefreshToken.for_user(user)
+    return {'access': str(refresh.access_token), 'refresh': str(refresh)}
 
 
 def _send_safe(subject, message, recipient_list):
@@ -237,9 +261,11 @@ def lma_login(request):
         user = User.objects.filter(email__iexact=email_lower).first()
 
     if not user or not user.check_password(password):
+        log_audit_event(request, 'login_failure', username=email, source='lma')
         return Response({'error': 'Invalid credentials.'}, status=401)
 
     if not user.is_active:
+        log_audit_event(request, 'login_failure', username=email, source='lma')
         return Response({'error': 'Account is inactive.'}, status=401)
 
     profile = _get_or_create_lma_profile(user)
@@ -250,11 +276,13 @@ def lma_login(request):
             status=403,
         )
 
+    log_audit_event(request, 'login_success', username=user.username, source='lma')
     token = _lma_token(user)
     name = user.get_full_name() or user.username
 
     return Response({
-        'lma_token': token,
+        'lma_token': token['access'],
+        'lma_refresh': token['refresh'],
         'lma_role': role,
         'can_access_student': profile.can_access_student,
         'can_access_instructor': profile.can_access_instructor,
@@ -315,8 +343,10 @@ def lma_register(request):
     except Exception as exc:
         return Response({'error': f'Could not create account: {exc}'}, status=400)
 
+    reg_token = _lma_token(user)
     return Response({
-        'lma_token': _lma_token(user),
+        'lma_token': reg_token['access'],
+        'lma_refresh': reg_token['refresh'],
         'lma_role': 'student',
         'can_access_student': True,
         'can_access_instructor': profile.can_access_instructor,
@@ -347,7 +377,7 @@ def course_detail(request, course_id):
         ).get(id=course_id)
     except Course.DoesNotExist:
         return Response({'error': 'Course not found.'}, status=404)
-    return Response(CourseDetailSerializer(course).data)
+    return Response(CourseDetailSerializer(course, context={'request': request}).data)
 
 
 # ── Enrollment & Payment ────────────────────────────────────────────────────
@@ -752,6 +782,12 @@ def lma_profile(request):
             'role': profile.lma_role,
             'date_joined': user.date_joined.isoformat(),
             'bio': profile.bio,
+            # Was missing before — LMAStudentLayout's "Instructor Portal" switch
+            # link checks exactly this field from this exact endpoint, so its
+            # absence meant that link could never show, even for instructors.
+            'can_access_instructor': profile.can_access_instructor,
+            'is_staff': user.is_staff,
+            'is_superuser': user.is_superuser,
         })
 
     name = clean_text(request.data.get('name', '').strip())
@@ -777,6 +813,327 @@ def lma_profile(request):
     profile.save()
 
     return Response({'success': True, 'name': user.get_full_name() or user.username})
+
+
+# ── LMA-wide admin views (is_staff / is_superuser only) ──────────────────────
+# Cross-instructor visibility — a regular instructor's can_access_instructor
+# check is NOT enough here, see IsLMAAdmin above.
+
+@api_view(['GET'])
+@permission_classes([IsLMAAdmin])
+def admin_students(request):
+    """GET /api/v1/lma/admin/students/ — every student with at least one
+    enrollment, one row per student, aggregated across all their courses."""
+    enrollments = Enrollment.objects.select_related('student', 'course', 'course__instructor')
+
+    by_student = {}
+    for e in enrollments:
+        s = e.student
+        row = by_student.setdefault(s.id, {
+            'student_id': s.id,
+            'student_name': s.get_full_name() or s.username,
+            'email': s.email,
+            'course_titles': [],
+            'course_ids': [],
+            'instructor_names': set(),
+            'progresses': [],
+            'enrolled_at': None,
+            'all_completed': True,
+        })
+        row['course_titles'].append(e.course.title)
+        row['course_ids'].append(e.course_id)
+        if e.course.instructor:
+            row['instructor_names'].add(e.course.instructor.get_full_name() or e.course.instructor.username)
+        row['progresses'].append(e.progress)
+        if row['enrolled_at'] is None or e.enrolled_at < row['enrolled_at']:
+            row['enrolled_at'] = e.enrolled_at
+        if not e.completed:
+            row['all_completed'] = False
+
+    results = []
+    for row in by_student.values():
+        progresses = row['progresses']
+        avg_progress = round(sum(progresses) / len(progresses), 1) if progresses else 0
+        results.append({
+            'student_id': row['student_id'],
+            'student_name': row['student_name'],
+            'email': row['email'],
+            'enrolled_courses': row['course_titles'],
+            'course_ids': row['course_ids'],
+            'instructor_names': sorted(row['instructor_names']),
+            'progress': avg_progress,
+            'enrolled_at': row['enrolled_at'].isoformat() if row['enrolled_at'] else None,
+            'status': 'completed' if row['all_completed'] else 'active',
+        })
+    results.sort(key=lambda r: r['student_name'].lower())
+    return Response(results)
+
+
+@api_view(['GET'])
+@permission_classes([IsLMAAdmin])
+def admin_enrollments(request):
+    """GET /api/v1/lma/admin/enrollments/ — flat list, one row per enrollment
+    (unlike admin_students, which aggregates a student's rows together)."""
+    enrollments = Enrollment.objects.select_related(
+        'student', 'course', 'course__instructor'
+    ).order_by('-enrolled_at')
+
+    results = [{
+        'id': e.id,
+        'student_name': e.student.get_full_name() or e.student.username,
+        'student_email': e.student.email,
+        'course_title': e.course.title,
+        'course_id': e.course_id,
+        'instructor_name': (e.course.instructor.get_full_name() or e.course.instructor.username) if e.course.instructor else '—',
+        'progress': e.progress,
+        'enrolled_at': e.enrolled_at.isoformat(),
+        'completed': e.completed,
+    } for e in enrollments]
+    return Response(results)
+
+
+@api_view(['GET'])
+@permission_classes([IsLMAAdmin])
+def admin_course_analytics(request):
+    """GET /api/v1/lma/admin/analytics/ — per-course enrollments, completion
+    rate and revenue across every course, for the ADMIN "Course Analytics"
+    page. Revenue is gross (price × enrollments), not the instructor's 70%
+    cut used on the instructor Earnings page — this is platform-wide."""
+    courses = Course.objects.select_related('instructor').annotate(
+        enrollment_count=Count('enrollments'),
+        completed_count=Count('enrollments', filter=Q(enrollments__completed=True)),
+    ).order_by('-enrollment_count')
+
+    results = [{
+        'id': c.id,
+        'title': c.title,
+        'instructor_name': (c.instructor.get_full_name() or c.instructor.username) if c.instructor else 'Unassigned',
+        'status': c.status,
+        'enrollments': c.enrollment_count,
+        'completion_rate': round(100 * c.completed_count / c.enrollment_count, 1) if c.enrollment_count else 0,
+        'price': float(c.price),
+        'revenue': round(float(c.price) * c.enrollment_count, 2),
+    } for c in courses]
+
+    totals = {
+        'total_courses': len(results),
+        'total_enrollments': sum(r['enrollments'] for r in results),
+        'total_revenue': round(sum(r['revenue'] for r in results), 2),
+        'avg_completion_rate': round(sum(r['completion_rate'] for r in results) / len(results), 1) if results else 0,
+    }
+    return Response({'courses': results, 'totals': totals})
+
+
+# ── Admin: all LMA users (not just enrolled) — full CRUD ─────────────────────
+# "Role" here is a single simplified label the admin UI edits — it's derived
+# from three underlying fields (is_staff, can_access_instructor, lma_role)
+# rather than being its own column, so _user_role/_apply_role are the one
+# place that mapping is defined, in both directions.
+
+def _user_role(user, profile):
+    if user.is_staff or user.is_superuser:
+        return 'admin'
+    if profile and profile.can_access_instructor:
+        return 'instructor'
+    return 'student'
+
+
+def _apply_role(user, profile, role):
+    if role == 'admin':
+        user.is_staff = True
+        profile.can_access_instructor = True
+        profile.lma_role = 'both'
+    elif role == 'instructor':
+        user.is_staff = False
+        profile.can_access_instructor = True
+        profile.lma_role = 'instructor'
+    elif role == 'student':
+        user.is_staff = False
+        profile.can_access_instructor = False
+        profile.lma_role = 'student'
+    else:
+        raise ValueError('Invalid role — must be student, instructor or admin.')
+
+
+@api_view(['GET'])
+@permission_classes([IsLMAAdmin])
+def admin_users(request):
+    """GET /api/v1/lma/admin/users/ — every registered user, including
+    students with zero enrollments (unlike admin_students, which only lists
+    students who have enrolled in something).
+
+    ?role=student narrows this to the "All Students" page's definition of
+    student, which is NOT simply "not staff":
+      - EXCLUDES is_superuser=True (real Django/site superadmins)
+      - EXCLUDES instructors (profile.can_access_instructor=True)
+      - INCLUDES is_staff=True accounts that are students otherwise — these
+        are "student dashboard admins" (is_staff for LMA-admin purposes),
+        a different concept from a site superuser, and the page is meant to
+        show them.
+    """
+    role_filter = request.GET.get('role')
+    users = User.objects.select_related('lma_profile').all().order_by('-date_joined')
+    enrollment_counts = dict(
+        Enrollment.objects.values_list('student_id').annotate(c=Count('id'))
+    )
+    results = []
+    for u in users:
+        profile = getattr(u, 'lma_profile', None)
+        is_instructor = bool(profile and profile.can_access_instructor)
+
+        if role_filter == 'student' and (u.is_superuser or is_instructor):
+            continue
+
+        results.append({
+            'id': u.id,
+            'name': u.get_full_name() or u.username,
+            'email': u.email,
+            'role': 'student' if role_filter == 'student' else _user_role(u, profile),
+            'is_staff': u.is_staff,
+            'courses_enrolled': enrollment_counts.get(u.id, 0),
+            'join_date': u.date_joined.isoformat(),
+            'status': 'active' if u.is_active else 'inactive',
+        })
+    return Response(results)
+
+
+@api_view(['PUT', 'DELETE'])
+@permission_classes([IsLMAAdmin])
+def admin_user_detail(request, user_id):
+    """PUT /api/v1/lma/admin/users/{id}/ — update name/email/role.
+    DELETE /api/v1/lma/admin/users/{id}/ — delete the account."""
+    if request.method == 'DELETE':
+        if request.user.id == user_id:
+            return Response({'error': 'You cannot delete your own account.'}, status=400)
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'error': 'User not found.'}, status=404)
+        user.delete()
+        return Response({'success': True})
+
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': 'User not found.'}, status=404)
+
+    profile = _get_or_create_lma_profile(user)
+
+    name = request.data.get('name')
+    email = request.data.get('email')
+    account_type = request.data.get('account_type')
+
+    if name is not None:
+        name = clean_text(name.strip())
+        parts = name.split(' ', 1)
+        user.first_name = parts[0]
+        user.last_name = parts[1] if len(parts) > 1 else ''
+
+    if email is not None:
+        email = email.strip().lower()
+        if email and User.objects.filter(email=email).exclude(pk=user.pk).exists():
+            return Response({'error': 'Email already in use.'}, status=400)
+        if email:
+            user.email = email
+
+    # Same two-option model as admin_create_user: this endpoint is used by
+    # the "All Students" Edit modal, which only ever offers Student / Student
+    # Admin — never Instructor or (site-superuser) Admin. is_superuser is
+    # never touched here either way.
+    if account_type is not None:
+        if account_type not in ('student', 'student_admin'):
+            return Response({'error': 'Invalid account type.'}, status=400)
+        try:
+            _apply_role(user, profile, 'student')
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=400)
+        user.is_staff = (account_type == 'student_admin')
+
+    user.save()
+    profile.save()
+    return Response({
+        'id': user.id,
+        'name': user.get_full_name() or user.username,
+        'email': user.email,
+        'role': 'student',
+        'is_staff': user.is_staff,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsLMAAdmin])
+def admin_create_user(request):
+    """POST /api/v1/lma/admin/users/create/ — {name, email, password, account_type}.
+    Student-only, always — the Create Account modal only ever creates
+    accounts for the student dashboard. `role` is hardcoded to 'student'
+    (never trusted from the request body), and `is_superuser` is never set —
+    this endpoint can never grant instructor, site-superuser, ERP, or Partner
+    Portal access, no matter what a client sends.
+
+    `account_type` is the one real choice this endpoint exposes:
+      - 'student'       -> is_staff=False (regular student)
+      - 'student_admin' -> is_staff=True  (admin of the student dashboard
+                            only — distinct from is_superuser, which this
+                            endpoint can never set)
+    """
+    name = (request.data.get('name') or '').strip()
+    email = (request.data.get('email') or '').strip().lower()
+    password = request.data.get('password') or ''
+    account_type = request.data.get('account_type') or 'student'
+    if account_type not in ('student', 'student_admin'):
+        return Response({'error': 'Invalid account type.'}, status=400)
+    role = 'student'
+
+    if not name or not email or not password:
+        return Response({'error': 'Name, email and password are required.'}, status=400)
+    if len(password) < 6:
+        return Response({'error': 'Password must be at least 6 characters.'}, status=400)
+    if not _re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
+        return Response({'error': 'Enter a valid email address.'}, status=400)
+    if User.objects.filter(email=email).exists():
+        return Response({'error': 'An account with this email already exists.'}, status=400)
+
+    base = _re.sub(r'[^a-z0-9_]', '', email.split('@')[0]) or 'user'
+    username, n = base, 1
+    while User.objects.filter(username=username).exists():
+        username = f"{base}{n}"; n += 1
+
+    parts = name.split(' ', 1)
+    try:
+        with transaction.atomic():
+            user = User(
+                username=username, email=email,
+                first_name=parts[0], last_name=parts[1] if len(parts) > 1 else '',
+                is_active=True,
+            )
+            user.set_password(password)
+            user._skip_profile_signal = True
+            user.save()
+
+            profile, _ = LMAProfile.objects.get_or_create(user=user)
+            try:
+                _apply_role(user, profile, role)
+            except ValueError as exc:
+                user.delete()
+                return Response({'error': str(exc)}, status=400)
+            # _apply_role('student') sets is_staff=False — override for the
+            # student_admin case. is_superuser is never touched either way.
+            user.is_staff = (account_type == 'student_admin')
+            user.save()
+            profile.save()
+    except Exception as exc:
+        return Response({'error': f'Could not create account: {exc}'}, status=400)
+
+    return Response({
+        'id': user.id,
+        'name': user.get_full_name() or user.username,
+        'email': user.email,
+        'role': 'student',
+        'is_staff': user.is_staff,
+        'courses_enrolled': 0,
+        'join_date': user.date_joined.isoformat(),
+        'status': 'active',
+    }, status=201)
 
 
 @api_view(['POST'])
@@ -1285,13 +1642,17 @@ def instructor_analytics(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def instructor_list(request):
-    """GET /api/v1/lma/instructor/instructors/ — list all instructors."""
+    """GET /api/v1/lma/instructor/instructors/ — list instructor accounts only.
+
+    Deliberately excludes superusers and any profile whose lma_role isn't
+    plain 'instructor' (e.g. 'both', used by admin accounts that also teach)
+    — this is the instructor-management roster, not a full user directory."""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_instructor_admin(request.user, profile):
+        return Response({'error': 'Instructor admin access required.'}, status=403)
 
     instructor_profiles = LMAProfile.objects.filter(
-        can_access_instructor=True
+        can_access_instructor=True, lma_role='instructor', user__is_superuser=False
     ).select_related('user').order_by('instructor_level', 'user__date_joined')
 
     data = [{
@@ -1300,6 +1661,7 @@ def instructor_list(request):
         'email': p.user.email,
         'username': p.user.username,
         'instructor_level': p.instructor_level,
+        'is_staff': p.user.is_staff,
         'date_joined': p.user.date_joined.isoformat(),
         'course_count': Course.objects.filter(instructor=p.user).count(),
     } for p in instructor_profiles]
@@ -1309,15 +1671,16 @@ def instructor_list(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def create_instructor(request):
-    """POST /api/v1/lma/instructor/create-instructor/ — super only."""
+    """POST /api/v1/lma/instructor/create-instructor/ — instructor admin only."""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_instructor_admin(request.user, profile):
+        return Response({'error': 'Instructor admin access required.'}, status=403)
 
     name = request.data.get('name', '').strip()
     email = request.data.get('email', '').strip().lower()
     password = request.data.get('password', '')
     bio = request.data.get('bio', '').strip()
+    account_type = request.data.get('account_type', 'instructor')
 
     if not name or not email or not password:
         return Response({'error': 'Name, email and password are required.'}, status=400)
@@ -1327,6 +1690,8 @@ def create_instructor(request):
         return Response({'error': 'Enter a valid email address.'}, status=400)
     if User.objects.filter(email=email).exists():
         return Response({'error': 'An account with this email already exists.'}, status=400)
+    if account_type not in ('instructor', 'instructor_admin'):
+        return Response({'error': 'account_type must be "instructor" or "instructor_admin".'}, status=400)
 
     base = _re.sub(r'[^a-z0-9_]', '', email.split('@')[0]) or 'instructor'
     username, n = base, 1
@@ -1339,7 +1704,7 @@ def create_instructor(request):
             user = User(
                 username=username, email=email,
                 first_name=parts[0], last_name=parts[1] if len(parts) > 1 else '',
-                is_active=True,
+                is_active=True, is_staff=(account_type == 'instructor_admin'),
             )
             user.set_password(password)
             user._skip_profile_signal = True
@@ -1361,16 +1726,17 @@ def create_instructor(request):
         'email': email,
         'username': username,
         'instructor_level': 'regular',
+        'is_staff': user.is_staff,
     }, status=201)
 
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated])
 def update_instructor(request, instructor_id):
-    """PUT /api/v1/lma/instructor/instructors/{id}/ — super only."""
+    """PUT /api/v1/lma/instructor/instructors/{id}/ — instructor admin only."""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_instructor_admin(request.user, profile):
+        return Response({'error': 'Instructor admin access required.'}, status=403)
 
     try:
         target_user = User.objects.get(id=instructor_id)
@@ -1385,10 +1751,14 @@ def update_instructor(request, instructor_id):
     full_name      = request.data.get('full_name', '').strip()
     email          = request.data.get('email', '').strip().lower()
     new_level      = request.data.get('instructor_level', '').strip()
+    account_type   = request.data.get('account_type', '').strip()
 
     # Validate level value
     if new_level and new_level not in ('regular', 'super'):
         return Response({'error': 'instructor_level must be "regular" or "super".'}, status=400)
+
+    if account_type and account_type not in ('instructor', 'instructor_admin'):
+        return Response({'error': 'account_type must be "instructor" or "instructor_admin".'}, status=400)
 
     # Cannot demote a super instructor
     if new_level and new_level != target_profile.instructor_level and _is_super(target_profile):
@@ -1417,6 +1787,8 @@ def update_instructor(request, instructor_id):
         parts = full_name.split(' ', 1)
         target_user.first_name = parts[0]
         target_user.last_name  = parts[1] if len(parts) > 1 else ''
+    if account_type:
+        target_user.is_staff = (account_type == 'instructor_admin')
     target_user.save()
 
     # Update level
@@ -1430,16 +1802,17 @@ def update_instructor(request, instructor_id):
         'name': target_user.get_full_name() or target_user.username,
         'email': target_user.email,
         'instructor_level': target_profile.instructor_level,
+        'is_staff': target_user.is_staff,
     })
 
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
 def delete_instructor(request, instructor_id):
-    """DELETE /api/v1/lma/instructor/instructors/{id}/ — super only."""
+    """DELETE /api/v1/lma/instructor/instructors/{id}/ — instructor admin only."""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_instructor_admin(request.user, profile):
+        return Response({'error': 'Instructor admin access required.'}, status=403)
 
     if int(instructor_id) == request.user.id:
         return Response({'error': 'Cannot delete your own account.'}, status=400)
@@ -1472,10 +1845,10 @@ def delete_instructor(request, instructor_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def instructor_course_list(request, instructor_id):
-    """GET /api/v1/lma/instructor/instructors/{id}/courses/ — super only."""
+    """GET /api/v1/lma/instructor/instructors/{id}/courses/ — instructor admin only."""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_instructor_admin(request.user, profile):
+        return Response({'error': 'Instructor admin access required.'}, status=403)
 
     try:
         target_user = User.objects.get(id=instructor_id)
@@ -1496,10 +1869,10 @@ def instructor_course_list(request, instructor_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def reset_instructor_password(request, instructor_id):
-    """POST /api/v1/lma/instructor/instructors/{id}/reset-password/ — super only."""
+    """POST /api/v1/lma/instructor/instructors/{id}/reset-password/ — instructor admin only."""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_instructor_admin(request.user, profile):
+        return Response({'error': 'Instructor admin access required.'}, status=403)
 
     try:
         target_user = User.objects.get(id=instructor_id)
@@ -1633,26 +2006,27 @@ def publish_course(request, course_id):
     course.rejection_reason = ''
     course.save(update_fields=['status', 'rejection_reason'])
 
-    # Notify instructor in-app
-    Notification.objects.create(
-        recipient=course.instructor,
-        title='Course Published!',
-        message=f'Congratulations! Your course "{course.title}" has been published.',
-        course=course,
-    )
-
-    # Email instructor
-    if course.instructor.email:
-        _send_safe(
-            subject=f'[Xerxez LMA] Your course "{course.title}" is now live!',
-            message=(
-                f'Hi {course.instructor.get_full_name() or course.instructor.username},\n\n'
-                f'Great news! Your course "{course.title}" has been reviewed and is now published on Xerxez LMA.\n\n'
-                f'Students can now enroll and start learning.\n\n'
-                f'— Xerxez LMA'
-            ),
-            recipient_list=[course.instructor.email],
+    # Notify instructor in-app — orphaned courses (instructor=None) have no one to notify
+    if course.instructor:
+        Notification.objects.create(
+            recipient=course.instructor,
+            title='Course Published!',
+            message=f'Congratulations! Your course "{course.title}" has been published.',
+            course=course,
         )
+
+        # Email instructor
+        if course.instructor.email:
+            _send_safe(
+                subject=f'[Xerxez LMA] Your course "{course.title}" is now live!',
+                message=(
+                    f'Hi {course.instructor.get_full_name() or course.instructor.username},\n\n'
+                    f'Great news! Your course "{course.title}" has been reviewed and is now published on Xerxez LMA.\n\n'
+                    f'Students can now enroll and start learning.\n\n'
+                    f'— Xerxez LMA'
+                ),
+                recipient_list=[course.instructor.email],
+            )
 
     return Response({'success': True, 'status': 'published'})
 
@@ -1684,27 +2058,28 @@ def reject_course(request, course_id):
     course.rejection_reason = reason
     course.save(update_fields=['status', 'rejection_reason'])
 
-    # Notify instructor in-app
-    Notification.objects.create(
-        recipient=course.instructor,
-        title='Course Needs Changes',
-        message=f'Your course "{course.title}" was not approved. Reason: {reason}',
-        course=course,
-    )
-
-    # Email instructor
-    if course.instructor.email:
-        _send_safe(
-            subject=f'[Xerxez LMA] Course "{course.title}" — Changes Required',
-            message=(
-                f'Hi {course.instructor.get_full_name() or course.instructor.username},\n\n'
-                f'Your course "{course.title}" requires some changes before it can be published.\n\n'
-                f'Feedback: {reason}\n\n'
-                f'Please update your course and re-submit for review.\n\n'
-                f'— Xerxez LMA'
-            ),
-            recipient_list=[course.instructor.email],
+    # Notify instructor in-app — orphaned courses (instructor=None) have no one to notify
+    if course.instructor:
+        Notification.objects.create(
+            recipient=course.instructor,
+            title='Course Needs Changes',
+            message=f'Your course "{course.title}" was not approved. Reason: {reason}',
+            course=course,
         )
+
+        # Email instructor
+        if course.instructor.email:
+            _send_safe(
+                subject=f'[Xerxez LMA] Course "{course.title}" — Changes Required',
+                message=(
+                    f'Hi {course.instructor.get_full_name() or course.instructor.username},\n\n'
+                    f'Your course "{course.title}" requires some changes before it can be published.\n\n'
+                    f'Feedback: {reason}\n\n'
+                    f'Please update your course and re-submit for review.\n\n'
+                    f'— Xerxez LMA'
+                ),
+                recipient_list=[course.instructor.email],
+            )
 
     return Response({'success': True, 'status': 'rejected'})
 
@@ -1767,8 +2142,8 @@ def pending_review_queue(request):
         'id': c.id,
         'title': c.title,
         'description': c.description[:200],
-        'instructor_name': c.instructor.get_full_name() or c.instructor.username,
-        'instructor_email': c.instructor.email,
+        'instructor_name': (c.instructor.get_full_name() or c.instructor.username) if c.instructor else 'Unassigned',
+        'instructor_email': c.instructor.email if c.instructor else '',
         'category': c.category,
         'level': c.level,
         'price': float(c.price),
@@ -1863,8 +2238,8 @@ def become_instructor(request):
 def list_applications(request):
     """GET /api/v1/lma/instructor/applications/?status=pending"""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_instructor_admin(request.user, profile):
+        return Response({'error': 'Instructor admin access required.'}, status=403)
 
     status_filter = request.query_params.get('status', '')
     qs = InstructorApplication.objects.all()
@@ -1892,10 +2267,10 @@ def list_applications(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def approve_application(request, app_id):
-    """POST /api/v1/lma/instructor/applications/{id}/approve/ — super only."""
+    """POST /api/v1/lma/instructor/applications/{id}/approve/ — instructor admin only."""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_instructor_admin(request.user, profile):
+        return Response({'error': 'Instructor admin access required.'}, status=403)
 
     try:
         app = InstructorApplication.objects.get(id=app_id)
@@ -2039,10 +2414,10 @@ def approve_application(request, app_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def reject_application(request, app_id):
-    """POST /api/v1/lma/instructor/applications/{id}/reject/ — super only."""
+    """POST /api/v1/lma/instructor/applications/{id}/reject/ — instructor admin only."""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_instructor_admin(request.user, profile):
+        return Response({'error': 'Instructor admin access required.'}, status=403)
 
     try:
         app = InstructorApplication.objects.get(id=app_id)
