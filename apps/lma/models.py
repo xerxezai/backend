@@ -61,6 +61,10 @@ class Course(models.Model):
     hours = models.IntegerField(default=0)
     lessons = models.IntegerField(default=0)
     tech_stack = models.JSONField(default=list)
+    # Up to 8 short bullet points set by the instructor — "What you'll learn" on
+    # the course detail page. Plain list of strings, e.g. ["Deploy models to
+    # production", "Build CI/CD pipelines for ML", ...].
+    learning_outcomes = models.JSONField(default=list, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     rejection_reason = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)

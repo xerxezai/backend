@@ -41,13 +41,21 @@ class LessonPublicSerializer(serializers.ModelSerializer):
     video_url is NEVER included here — it is served only via the
     authenticated /lessons/{id}/video/ endpoint after enrollment check."""
     has_video = serializers.SerializerMethodField()
+    is_completed = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
-        fields = ['id', 'title', 'duration', 'order', 'is_free_preview', 'content', 'has_video']
+        fields = ['id', 'title', 'duration', 'order', 'is_free_preview', 'content', 'has_video', 'is_completed']
 
     def get_has_video(self, obj):
         return bool(obj.video_url)
+
+    def get_is_completed(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return False
+        return obj.completions.filter(student=user).exists()
 
 
 class ModuleSerializer(serializers.ModelSerializer):
@@ -104,6 +112,8 @@ class CourseListSerializer(serializers.ModelSerializer):
         ]
 
     def get_instructor_name(self, obj):
+        if not obj.instructor:
+            return "Unassigned"
         return obj.instructor.get_full_name() or obj.instructor.username
 
     # ── per-object caches (avoids duplicate queries per field) ────────────
@@ -157,7 +167,7 @@ class CourseDetailSerializer(CourseListSerializer):
         fields = [
             'id', 'title', 'description', 'category', 'level', 'price',
             'badge', 'rating', 'total_ratings', 'total_students',
-            'hours', 'lessons', 'tech_stack', 'header_color',
+            'hours', 'lessons', 'tech_stack', 'learning_outcomes', 'header_color',
             'instructor_name', 'status', 'created_at', 'updated_at',
             'modules', 'avg_completion',
         ]
@@ -188,7 +198,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         ]
 
     def get_course_instructor(self, obj):
-        return obj.course.instructor.username
+        return obj.course.instructor.username if obj.course.instructor else 'Unassigned'
 
 
 class AssignmentSerializer(serializers.ModelSerializer):
@@ -254,7 +264,7 @@ class CourseCreateSerializer(serializers.ModelSerializer):
         model = Course
         fields = [
             'title', 'description', 'category', 'level', 'price',
-            'badge', 'header_color', 'tech_stack', 'status',
+            'badge', 'header_color', 'tech_stack', 'learning_outcomes', 'status',
         ]
 
     def validate_title(self, value):
@@ -262,3 +272,11 @@ class CourseCreateSerializer(serializers.ModelSerializer):
 
     def validate_description(self, value):
         return clean_text(value)
+
+    def validate_learning_outcomes(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError('Must be a list of strings.')
+        cleaned = [clean_text(str(v)).strip() for v in value if str(v).strip()]
+        if len(cleaned) > 8:
+            raise serializers.ValidationError('Up to 8 learning outcomes only.')
+        return cleaned

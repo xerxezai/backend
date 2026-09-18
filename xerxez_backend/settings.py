@@ -141,6 +141,7 @@ AUTH_PASSWORD_VALIDATORS = [
     },
     {
         'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {'min_length': 10},
     },
     {
         'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
@@ -174,8 +175,6 @@ AUTH_USER_MODEL = 'accounts.User'
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'rest_framework.authentication.TokenAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -198,7 +197,7 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': backend_config.get('api.rate_limiting.default_rate'),
         'user': backend_config.get('api.rate_limiting.auth_rate'),
-        'login': '5/min',
+        # 'login': '5/15min',  # Re-enable before production
         'become_instructor': '3/hour',
     }
 }
@@ -209,21 +208,31 @@ if not DEBUG:
         'rest_framework.renderers.JSONRenderer',
     ]
 
-# JWT configuration
+# JWT configuration — enterprise-grade / short-lived-token posture:
+# a stolen access token is only useful for 30 minutes, the refresh token that
+# could extend a session is capped at 1 day, and every refresh rotates AND
+# blacklists the previous refresh token, so a stolen refresh token is only
+# usable once before it's dead. The frontend does not silently refresh on
+# expiry (by design — see useERPApi.ts/LMA login) so a user is re-prompted to
+# log in regularly rather than staying signed in indefinitely.
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': True,
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),   # short — 30 min only
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),      # 1 day max
+    'ROTATE_REFRESH_TOKENS': True,                    # new refresh token every use
+    'BLACKLIST_AFTER_ROTATION': True,                 # old token immediately invalid
+    'UPDATE_LAST_LOGIN': True,                        # track last login
+    'ALGORITHM': 'HS256',
     'AUTH_HEADER_TYPES': ('Bearer',),
+    # JWT_SECRET_KEY should be set separately from SECRET_KEY in .env
     'SIGNING_KEY': os.getenv('JWT_SECRET_KEY') or SECRET_KEY,
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
 }
 
-# CORS configuration — locked to explicit origins in production.
-# Set CORS_ALLOW_ALL_ORIGINS=True in the environment only for throwaway preview deploys.
-CORS_ALLOW_ALL_ORIGINS = os.getenv(
-    'CORS_ALLOW_ALL_ORIGINS', 'True' if DEBUG else 'False'
-).lower() in ('true', '1', 'yes')
+# CORS configuration — locked to the explicit allowlist below, always. No env
+# override to open this up wholesale: CORS_ALLOW_ALL_ORIGINS is deliberately
+# not wired to any setting — the only way to add an origin is CORS_ALLOWED_ORIGINS
+# (see backend_config._get_cors_origins), which only ever adds, never opens all.
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = backend_config.get('api.cors.allowed_origins')
 CORS_ALLOW_CREDENTIALS = backend_config.get('api.cors.allow_credentials')
 CORS_PREFLIGHT_MAX_AGE = backend_config.get('api.cors.max_age')

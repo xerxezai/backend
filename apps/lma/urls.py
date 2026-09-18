@@ -76,4 +76,11 @@ urlpatterns = [
     path('instructor/applications/', views.list_applications, name='lma-applications'),
     path('instructor/applications/<int:app_id>/approve/', views.approve_application, name='lma-approve-application'),
     path('instructor/applications/<int:app_id>/reject/', views.reject_application, name='lma-reject-application'),
+
+    # Admin (is_staff / is_superuser only) — cross-instructor visibility
+    path('admin/students/', views.admin_students, name='lma-admin-students'),
+    path('admin/enrollments/', views.admin_enrollments, name='lma-admin-enrollments'),
+    path('admin/users/', views.admin_users, name='lma-admin-users'),
+    path('admin/users/create/', views.admin_create_user, name='lma-admin-create-user'),
+    path('admin/users/<int:user_id>/', views.admin_user_detail, name='lma-admin-user-detail'),
 ]

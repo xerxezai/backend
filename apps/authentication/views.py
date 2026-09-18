@@ -12,7 +12,6 @@ User = get_user_model()
 from rest_framework import generics, permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken, Token
 from rest_framework_simplejwt.exceptions import TokenError
 from drf_yasg.utils import swagger_auto_schema
@@ -29,6 +28,8 @@ from .serializers import (
     ResetPasswordSerializer,
 )
 from rest_framework.parsers import MultiPartParser, FormParser
+from apps.core.throttles import LoginRateThrottle
+from apps.core.audit import log_audit_event
 
 
 def _user_payload(user):
@@ -58,15 +59,20 @@ class LoginView(generics.GenericAPIView):
     """POST /api/v1/auth/login/ — returns JWT access + refresh tokens."""
     serializer_class = LoginSerializer
     permission_classes = [permissions.AllowAny]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = 'login'
+    throttle_classes = [LoginRateThrottle]
 
     @swagger_auto_schema(request_body=LoginSerializer)
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        attempted_username = str(request.data.get('username') or request.data.get('email') or '')
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception:
+            log_audit_event(request, 'login_failure', username=attempted_username, source='erp')
+            raise
 
         user = serializer.validated_data['user']
+        log_audit_event(request, 'login_success', username=user.username, source='erp')
 
         # Update last_login_at on the profile
         try:
@@ -122,6 +128,7 @@ def logout_view(request):
             RefreshToken(refresh_token).blacklist()
     except TokenError:
         pass
+    log_audit_event(request, 'logout', username=getattr(request.user, 'username', ''), source='erp')
     return Response({'message': 'Successfully logged out'}, status=status.HTTP_200_OK)
 
 

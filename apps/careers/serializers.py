@@ -1,9 +1,10 @@
 from rest_framework import serializers
 
+from apps.core.serializers import SanitizedModelSerializer
 from .models import CareerApplication
 
 
-class CareerApplicationSerializer(serializers.ModelSerializer):
+class CareerApplicationSerializer(SanitizedModelSerializer):
     class Meta:
         model = CareerApplication
         fields = '__all__'

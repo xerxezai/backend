@@ -53,10 +53,13 @@ class BackendConfig:
 'database': {
     'default': {
         'engine': 'django.db.backends.postgresql',
-        'name': os.getenv('DB_NAME', 'xerxez'),
-        'user': os.getenv('DB_USER', 'xerxez_user'),
-        'password': os.getenv('DB_PASSWORD', 'xerxez_pass'),
-        'host': os.getenv('DB_HOST', 'postgres'),
+        # No hardcoded fallback credentials — an unset DB_* env var now produces an
+        # empty/blank value (and a clear connection failure) instead of silently
+        # connecting with a weak, guessable default password.
+        'name': os.getenv('DB_NAME', ''),
+        'user': os.getenv('DB_USER', ''),
+        'password': os.getenv('DB_PASSWORD', ''),
+        'host': os.getenv('DB_HOST', 'localhost'),
         'port': os.getenv('DB_PORT', '5432'),
         'options': {
             'sslmode': os.getenv('DB_SSLMODE', 'prefer'),
@@ -84,8 +87,8 @@ class BackendConfig:
                 },
                 'rate_limiting': {
                     'enabled': True,
-                    'default_rate': '1000/hour',
-                    'auth_rate': '10000/hour'
+                    'default_rate': '100/hour',   # anonymous requests
+                    'auth_rate': '1000/hour'      # authenticated requests
                 }
             },
             
@@ -314,20 +317,18 @@ class BackendConfig:
     def _get_cors_origins(self) -> List[str]:
         """Get CORS allowed origins based on environment.
 
-        The essential production domains and local dev ports are always
-        included, even when CORS_ALLOWED_ORIGINS is set on the host —
-        that env var only ever *adds* origins, it never removes these
-        so a misconfigured/incomplete env var can't lock out the real
-        site or break `npm run dev` testing against the live API.
+        Locked to only the real production domains in production; the local
+        dev port is added on top of those everywhere else. These essentials
+        are always included even when CORS_ALLOWED_ORIGINS is set on the
+        host — that env var only ever *adds* origins, it never removes these,
+        so a misconfigured/incomplete env var can't lock out the real site.
         """
         essentials = [
             'https://xerxez.com',
             'https://www.xerxez.com',
-            'http://localhost:5173',
-            'http://127.0.0.1:5173',
-            'http://localhost:3000',
-            'http://127.0.0.1:3000',
         ]
+        if self.environment != 'production':
+            essentials.append('http://localhost:5173')
         env_value = os.getenv('CORS_ALLOWED_ORIGINS')
         env_origins = [o.strip() for o in env_value.split(',') if o.strip()] if env_value else []
         merged = list(dict.fromkeys(env_origins + essentials))
