@@ -892,6 +892,38 @@ def admin_enrollments(request):
     return Response(results)
 
 
+@api_view(['GET'])
+@permission_classes([IsLMAAdmin])
+def admin_course_analytics(request):
+    """GET /api/v1/lma/admin/analytics/ — per-course enrollments, completion
+    rate and revenue across every course, for the ADMIN "Course Analytics"
+    page. Revenue is gross (price × enrollments), not the instructor's 70%
+    cut used on the instructor Earnings page — this is platform-wide."""
+    courses = Course.objects.select_related('instructor').annotate(
+        enrollment_count=Count('enrollments'),
+        completed_count=Count('enrollments', filter=Q(enrollments__completed=True)),
+    ).order_by('-enrollment_count')
+
+    results = [{
+        'id': c.id,
+        'title': c.title,
+        'instructor_name': (c.instructor.get_full_name() or c.instructor.username) if c.instructor else 'Unassigned',
+        'status': c.status,
+        'enrollments': c.enrollment_count,
+        'completion_rate': round(100 * c.completed_count / c.enrollment_count, 1) if c.enrollment_count else 0,
+        'price': float(c.price),
+        'revenue': round(float(c.price) * c.enrollment_count, 2),
+    } for c in courses]
+
+    totals = {
+        'total_courses': len(results),
+        'total_enrollments': sum(r['enrollments'] for r in results),
+        'total_revenue': round(sum(r['revenue'] for r in results), 2),
+        'avg_completion_rate': round(sum(r['completion_rate'] for r in results) / len(results), 1) if results else 0,
+    }
+    return Response({'courses': results, 'totals': totals})
+
+
 # ── Admin: all LMA users (not just enrolled) — full CRUD ─────────────────────
 # "Role" here is a single simplified label the admin UI edits — it's derived
 # from three underlying fields (is_staff, can_access_instructor, lma_role)
