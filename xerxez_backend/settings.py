@@ -208,16 +208,20 @@ if not DEBUG:
         'rest_framework.renderers.JSONRenderer',
     ]
 
-# JWT configuration — enterprise-grade / short-lived-token posture:
-# a stolen access token is only useful for 30 minutes, the refresh token that
-# could extend a session is capped at 1 day, and every refresh rotates AND
-# blacklists the previous refresh token, so a stolen refresh token is only
-# usable once before it's dead. The frontend does not silently refresh on
-# expiry (by design — see useERPApi.ts/LMA login) so a user is re-prompted to
-# log in regularly rather than staying signed in indefinitely.
+# JWT configuration — "middle ground" posture: an 8-hour access token covers
+# a full work/login session without re-prompting, matched by an 8-hour
+# refresh token so a session that goes quiet for 8+ hours (closed browser
+# overnight, etc.) requires a fresh login rather than staying alive forever.
+# Every refresh rotates AND blacklists the previous refresh token, so a
+# stolen refresh token is only usable once before it's dead. This setting is
+# global — shared by ERP, LMA, and the partner portal, not LMA-specific.
+# The LMA frontend (src/utils/lmaAuth.ts) refreshes proactively every 7
+# hours while the app stays open, so an active session effectively never
+# expires; ERP/partner portal still don't silently refresh (see
+# useERPApi.ts), so those sessions get a flat 8-hour window before re-login.
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),   # short — 30 min only
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),      # 1 day max
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),      # 8 hours
+    'REFRESH_TOKEN_LIFETIME': timedelta(hours=8),     # 8 hours — same as access
     'ROTATE_REFRESH_TOKENS': True,                    # new refresh token every use
     'BLACKLIST_AFTER_ROTATION': True,                 # old token immediately invalid
     'UPDATE_LAST_LOGIN': True,                        # track last login

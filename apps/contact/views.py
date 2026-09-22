@@ -59,6 +59,11 @@ QUALIFICATION_FIELDS = [
     ('Training Mode', 'training_mode'),
     ('Training Duration', 'training_duration'),
     ('Topics of Interest', 'topics_of_interest'),
+    ('Course Name(s)', 'course_names'),
+    ('Platform URL', 'platform_url'),
+    ('Course URL(s)', 'course_url'),
+    ('Coupon Code', 'coupon_code'),
+    ('Discount Amount', 'discount_amount'),
     ('Heard Via', 'hear_about_us'),
 ]
 
@@ -241,10 +246,18 @@ class ContactMessageCreateView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # 1. Notify XERXEZ team
-        urgency = instance.urgency or 'normal'
-        prefix  = {'urgent': '[URGENT] ', 'critical': '[CRITICAL] '}.get(urgency, '')
-        subject = f"{prefix}New Enquiry: {instance.subject or instance.full_name}"
+        is_partner_course_listing = instance.service == 'Partner Course Listing'
+
+        # 1. Notify XERXEZ team — same notification email (already lists every
+        # form field: name, email, phone, company, service, qualification
+        # rows, message) for every service, just a distinct subject line for
+        # partner course listing requests so they're easy to spot/filter.
+        if is_partner_course_listing:
+            subject = f"New Partner Course Listing Request — {instance.company or instance.full_name}"
+        else:
+            urgency = instance.urgency or 'normal'
+            prefix  = {'urgent': '[URGENT] ', 'critical': '[CRITICAL] '}.get(urgency, '')
+            subject = f"{prefix}New Enquiry: {instance.subject or instance.full_name}"
 
         plain, html = _notification_email(instance)
         _send_via_resend(
@@ -255,14 +268,40 @@ class ContactMessageCreateView(APIView):
             reply_to=instance.email,
         )
 
-        # 2. Auto-reply to enquirer
-        ar_plain, ar_html = _auto_reply_email(instance)
-        _send_via_resend(
-            to=instance.email,
-            subject="Thank you for contacting XERXEZ",
-            html=ar_html,
-            text=ar_plain,
-        )
+        # 2. Auto-reply to enquirer — partner course listing gets its own
+        # subject/body (48h review turnaround) instead of the generic 24h copy.
+        if is_partner_course_listing:
+            first = instance.full_name.split()[0] if instance.full_name else 'there'
+            _send_via_resend(
+                to=instance.email,
+                subject="Thank you for your interest in listing courses on XERXEZ",
+                text=(
+                    f"Hi {first},\n\n"
+                    f"Thank you for your interest in listing your courses on XERXEZ.\n"
+                    f"We'll review and contact you within 48 hours.\n\n"
+                    f"Best regards,\nThe XERXEZ Team\ninfo@xerxez.com | xerxez.com"
+                ),
+                html=(
+                    f'<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
+                    f'<body style="font-family:\'Segoe UI\',Arial,sans-serif;background:#F2EFE9;margin:0;padding:32px 16px">'
+                    f'<div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,.10)">'
+                    f'<div style="background:#1a1a1a;padding:32px 36px;text-align:center"><h1 style="color:#D4A853;font-family:Georgia,serif;font-size:20px;margin:0">XERXEZ</h1></div>'
+                    f'<div style="padding:32px 36px;font-size:14px;color:#333;line-height:1.74">'
+                    f'<p>Hi {first},</p>'
+                    f"<p>Thank you for your interest in listing your courses on XERXEZ. We'll review and contact you within <strong>48 hours</strong>.</p>"
+                    f'<p>Best regards,<br><strong>The XERXEZ Team</strong></p></div>'
+                    f'<div style="background:#1a1a1a;padding:16px 36px;text-align:center;font-size:12px;color:rgba(255,255,255,.45)">XERXEZ &nbsp;·&nbsp; info@xerxez.com &nbsp;·&nbsp; xerxez.com</div>'
+                    f'</div></body></html>'
+                ),
+            )
+        else:
+            ar_plain, ar_html = _auto_reply_email(instance)
+            _send_via_resend(
+                to=instance.email,
+                subject="Thank you for contacting XERXEZ",
+                html=ar_html,
+                text=ar_plain,
+            )
 
         # 3. Auto-create a CRM lead so sales can follow up — best-effort, a CRM hiccup
         # must never block the visitor's enquiry from being saved and acknowledged.

@@ -86,6 +86,14 @@ api_patterns = [
     # Partner applications — mounted under /api/v1/ (not the spec's standalone
     # '/api/partners/') to match this codebase's single-prefix convention.
     path('partners/', include('apps.partners.urls')),
+
+    # LMA affiliate program — deliberately separate from apps.partners (the
+    # unrelated ERP reseller program) despite similar vocabulary.
+    path('affiliates/', include('apps.affiliates.urls')),
+
+    # External partner courses shown on the Training page (Linux Foundation,
+    # Coursera, Udemy, …) — also deliberately separate from apps.partners.
+    path('partner-courses/', include('apps.partner_courses.urls')),
 ]
 
 

@@ -234,6 +234,16 @@ class BackendConfig:
                 'partners': {
                     'enabled': True,
                     'path': 'apps.partners'
+                },
+                # ---- LMA affiliate program ----
+                'affiliates': {
+                    'enabled': True,
+                    'path': 'apps.affiliates'
+                },
+                # ---- External partner courses (Linux Foundation, Coursera, etc.) ----
+                'partner_courses': {
+                    'enabled': True,
+                    'path': 'apps.partner_courses'
                 }
             },
             
@@ -328,7 +338,14 @@ class BackendConfig:
             'https://www.xerxez.com',
         ]
         if self.environment != 'production':
-            essentials.append('http://localhost:5173')
+            # Vite auto-bumps to the next free port when 5173 is already taken
+            # (e.g. a second dev server left running) — allow that range too,
+            # not just the default, so a bumped port doesn't get CORS-blocked.
+            essentials.extend([
+                'http://localhost:5173', 'http://127.0.0.1:5173',
+                'http://localhost:5174', 'http://127.0.0.1:5174',
+                'http://localhost:5175', 'http://localhost:5176',
+            ])
         env_value = os.getenv('CORS_ALLOWED_ORIGINS')
         env_origins = [o.strip() for o in env_value.split(',') if o.strip()] if env_value else []
         merged = list(dict.fromkeys(env_origins + essentials))
