@@ -67,6 +67,13 @@ class ContactMessage(models.Model):
     topics_of_interest   = models.CharField(max_length=500, blank=True)
     training_duration    = models.CharField(max_length=30, blank=True)
 
+    # Partner Course Listing
+    course_names       = models.CharField(max_length=500, blank=True)
+    platform_url       = models.URLField(max_length=500, blank=True)
+    course_url          = models.URLField(max_length=500, blank=True)
+    coupon_code         = models.CharField(max_length=100, blank=True)
+    discount_amount     = models.CharField(max_length=50, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     is_read    = models.BooleanField(default=False)
 

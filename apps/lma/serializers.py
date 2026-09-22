@@ -4,30 +4,68 @@ from apps.core.sanitize import clean_text
 from .models import (
     LMAProfile, Course, Module, Lesson,
     Enrollment, Assignment, Submission, Certificate, Review, LessonProgress,
+    Quiz, QuizQuestion, QuizAttempt, LessonAssignment, LessonAssignmentSubmission,
 )
 
 
 class LessonSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lesson
-        fields = ['id', 'title', 'duration', 'order', 'is_free_preview']
+        fields = ['id', 'title', 'duration', 'order', 'is_free_preview', 'content_type']
 
 
 class LessonDetailSerializer(serializers.ModelSerializer):
-    """Full lesson data including content + video_url — instructor only."""
+    """Full lesson data — instructor only."""
+    assignment = serializers.SerializerMethodField()
+    # Plain FileField serialization returns a host-relative path
+    # ("/media/lessons/videos/x.mp4") — fine for same-origin <img>/<video> src
+    # in production, but the frontend also talks to a separate-origin local
+    # dev backend (127.0.0.1:8000), where a relative path resolves against
+    # the *frontend's* origin and 404s. Returning an absolute URL (built from
+    # this request) makes both cases work without frontend-side origin logic.
+    video_file = serializers.SerializerMethodField()
+    document_file = serializers.SerializerMethodField()
+
     class Meta:
         model = Lesson
-        fields = ['id', 'title', 'duration', 'order', 'is_free_preview', 'content', 'video_url']
+        fields = [
+            'id', 'title', 'duration', 'order', 'is_free_preview', 'content', 'video_url',
+            'content_type', 'video_file', 'document_file', 'text_content', 'resources',
+            'live_session_url', 'live_session_date', 'is_downloadable', 'assignment',
+        ]
+
+    def get_assignment(self, obj):
+        try:
+            return LessonAssignmentSerializer(obj.lesson_assignment).data
+        except LessonAssignment.DoesNotExist:
+            return None
+
+    def _absolute_file_url(self, file_field):
+        if not file_field:
+            return None
+        request = self.context.get('request')
+        return request.build_absolute_uri(file_field.url) if request else file_field.url
+
+    def get_video_file(self, obj):
+        return self._absolute_file_url(obj.video_file)
+
+    def get_document_file(self, obj):
+        return self._absolute_file_url(obj.document_file)
 
 
 class LessonWriteSerializer(serializers.ModelSerializer):
     # Use CharField instead of URLField so any URL format is accepted
     # (short-form youtu.be/... links, relative paths, etc.)
     video_url = serializers.CharField(allow_blank=True, required=False, default='')
+    live_session_url = serializers.CharField(allow_blank=True, required=False, default='')
 
     class Meta:
         model = Lesson
-        fields = ['title', 'duration', 'order', 'is_free_preview', 'content', 'video_url']
+        fields = [
+            'title', 'duration', 'order', 'is_free_preview', 'content', 'video_url',
+            'content_type', 'text_content', 'resources',
+            'live_session_url', 'live_session_date', 'is_downloadable',
+        ]
 
     def validate_title(self, value):
         return clean_text(value)
@@ -35,20 +73,47 @@ class LessonWriteSerializer(serializers.ModelSerializer):
     def validate_content(self, value):
         return clean_text(value)
 
+    def validate_text_content(self, value):
+        return clean_text(value)
+
 
 class LessonPublicSerializer(serializers.ModelSerializer):
     """Lesson data for the public course detail endpoint.
-    video_url is NEVER included here — it is served only via the
+    video_url/video_file are NEVER included here — served only via the
     authenticated /lessons/{id}/video/ endpoint after enrollment check."""
     has_video = serializers.SerializerMethodField()
     is_completed = serializers.SerializerMethodField()
+    has_content = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
-        fields = ['id', 'title', 'duration', 'order', 'is_free_preview', 'content', 'has_video', 'is_completed']
+        fields = [
+            'id', 'title', 'duration', 'order', 'is_free_preview', 'content',
+            'has_video', 'is_completed', 'content_type', 'has_content',
+        ]
 
     def get_has_video(self, obj):
-        return bool(obj.video_url)
+        return bool(obj.video_url or obj.video_file)
+
+    def get_has_content(self, obj):
+        """Whether this lesson actually has content filled in yet for its
+        selected type — an instructor can create a lesson with just a title
+        and add content later, so the student side needs to distinguish
+        "not authored yet" from a genuinely empty/broken lesson."""
+        ct = obj.content_type
+        if ct == 'video':
+            return bool(obj.video_url or obj.video_file)
+        if ct == 'document':
+            return bool(obj.document_file)
+        if ct == 'text':
+            return bool(obj.text_content.strip())
+        if ct == 'live_session':
+            return bool(obj.live_session_url)
+        if ct == 'quiz':
+            return hasattr(obj, 'quiz') and obj.quiz.questions.exists()
+        if ct == 'assignment':
+            return hasattr(obj, 'lesson_assignment') and bool(obj.lesson_assignment.description.strip())
+        return False
 
     def get_is_completed(self, obj):
         request = self.context.get('request')
@@ -59,21 +124,21 @@ class LessonPublicSerializer(serializers.ModelSerializer):
 
 
 class ModuleSerializer(serializers.ModelSerializer):
-    """Full module data including video_url — for instructor-only endpoints."""
+    """Full module data — for instructor-only endpoints."""
     lessons = LessonDetailSerializer(many=True, read_only=True)
 
     class Meta:
         model = Module
-        fields = ['id', 'title', 'order', 'duration', 'lessons']
+        fields = ['id', 'title', 'description', 'order', 'duration', 'lessons']
 
 
 class ModulePublicSerializer(serializers.ModelSerializer):
-    """Module data for public course detail — video_url stripped from all lessons."""
+    """Module data for public course detail — video stripped from all lessons."""
     lessons = LessonPublicSerializer(many=True, read_only=True)
 
     class Meta:
         model = Module
-        fields = ['id', 'title', 'order', 'duration', 'lessons']
+        fields = ['id', 'title', 'description', 'order', 'duration', 'lessons']
 
 
 class ModuleWriteSerializer(serializers.ModelSerializer):
@@ -82,10 +147,78 @@ class ModuleWriteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Module
-        fields = ['title', 'order', 'duration']
+        fields = ['title', 'description', 'order', 'duration']
 
     def validate_title(self, value):
         return clean_text(value)
+
+
+# ── Quiz ───────────────────────────────────────────────────────────────────
+
+class QuizQuestionSerializer(serializers.ModelSerializer):
+    """Full question data including the correct answer — instructor only."""
+    class Meta:
+        model = QuizQuestion
+        fields = ['id', 'question', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer', 'explanation', 'order']
+
+    def validate_question(self, value):
+        return clean_text(value)
+
+
+class QuizQuestionStudentSerializer(serializers.ModelSerializer):
+    """Question data with the answer withheld — used before a student submits."""
+    class Meta:
+        model = QuizQuestion
+        fields = ['id', 'question', 'option_a', 'option_b', 'option_c', 'option_d', 'order']
+
+
+class QuizSerializer(serializers.ModelSerializer):
+    questions = QuizQuestionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Quiz
+        fields = ['id', 'lesson', 'passing_score', 'questions']
+
+
+class QuizStudentSerializer(serializers.ModelSerializer):
+    questions = QuizQuestionStudentSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Quiz
+        fields = ['id', 'lesson', 'passing_score', 'questions']
+
+
+class QuizAttemptSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = QuizAttempt
+        fields = ['id', 'quiz', 'score', 'passed', 'submitted_at']
+
+
+# ── Lesson assignment ────────────────────────────────────────────────────────
+
+class LessonAssignmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LessonAssignment
+        fields = ['id', 'lesson', 'title', 'description', 'due_days', 'submission_type']
+        read_only_fields = ['lesson']
+
+    def validate_title(self, value):
+        return clean_text(value)
+
+    def validate_description(self, value):
+        return clean_text(value)
+
+
+class LessonAssignmentSubmissionSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LessonAssignmentSubmission
+        fields = ['id', 'assignment', 'student', 'student_name', 'content', 'file', 'grade', 'feedback', 'submitted_at', 'graded_at']
+        read_only_fields = ['student', 'grade', 'feedback', 'graded_at']
+
+    def get_student_name(self, obj):
+        return obj.student.get_full_name() or obj.student.username
 
 
 class CourseListSerializer(serializers.ModelSerializer):
@@ -161,6 +294,14 @@ class CourseListSerializer(serializers.ModelSerializer):
 class CourseDetailSerializer(CourseListSerializer):
     modules        = ModulePublicSerializer(many=True, read_only=True)
     avg_completion = serializers.SerializerMethodField()
+    # Partner branding — sourced from the instructor's LMAProfile, blank when
+    # not set (e.g. no company name), so the frontend can conditionally show
+    # an "Offered by …" section only when there's something to show.
+    instructor_company_name = serializers.SerializerMethodField()
+    instructor_website       = serializers.SerializerMethodField()
+    instructor_bio           = serializers.SerializerMethodField()
+    has_certificate_template = serializers.SerializerMethodField()
+    is_instructor             = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -170,7 +311,17 @@ class CourseDetailSerializer(CourseListSerializer):
             'hours', 'lessons', 'tech_stack', 'learning_outcomes', 'header_color',
             'instructor_name', 'status', 'created_at', 'updated_at',
             'modules', 'avg_completion',
+            'instructor_company_name', 'instructor_website', 'instructor_bio',
+            'has_certificate_template', 'is_instructor',
         ]
+
+    def get_has_certificate_template(self, obj):
+        return bool(obj.certificate_template)
+
+    def get_is_instructor(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        return bool(user and user.is_authenticated and obj.instructor_id == user.id)
 
     def get_avg_completion(self, obj):
         enrolled = self._enrolled(obj)
@@ -182,6 +333,23 @@ class CourseDetailSerializer(CourseListSerializer):
         completed = LessonProgress.objects.filter(lesson__module__course=obj).count()
         total_possible = lesson_count * enrolled
         return round(completed / total_possible * 100, 1)
+
+    def _instructor_profile(self, obj):
+        if not obj.instructor:
+            return None
+        return getattr(obj.instructor, 'lma_profile', None)
+
+    def get_instructor_company_name(self, obj):
+        profile = self._instructor_profile(obj)
+        return profile.company_name if profile else ''
+
+    def get_instructor_website(self, obj):
+        profile = self._instructor_profile(obj)
+        return profile.website if profile else ''
+
+    def get_instructor_bio(self, obj):
+        profile = self._instructor_profile(obj)
+        return profile.bio if profile else ''
 
 
 class EnrollmentSerializer(serializers.ModelSerializer):
@@ -226,10 +394,21 @@ class SubmissionSerializer(serializers.ModelSerializer):
 
 class CertificateSerializer(serializers.ModelSerializer):
     course_title = serializers.CharField(source='course.title', read_only=True)
+    student_name = serializers.SerializerMethodField()
+    certificate_file = serializers.SerializerMethodField()
 
     class Meta:
         model = Certificate
-        fields = ['id', 'course', 'course_title', 'issued_at']
+        fields = ['id', 'course', 'course_title', 'student_name', 'issued_at', 'certificate_file', 'unique_id']
+
+    def get_student_name(self, obj):
+        return obj.student.get_full_name() or obj.student.username
+
+    def get_certificate_file(self, obj):
+        if not obj.certificate_file:
+            return None
+        request = self.context.get('request')
+        return request.build_absolute_uri(obj.certificate_file.url) if request else obj.certificate_file.url
 
 
 class ReviewSerializer(serializers.ModelSerializer):

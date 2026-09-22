@@ -11,7 +11,7 @@ from django.db.models import Q, Count
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes, parser_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
@@ -42,6 +42,7 @@ from .models import (
     LMAProfile, Course, Module, Lesson, Enrollment, Assignment,
     Submission, Certificate, Review, LessonProgress, Notification,
     InstructorApplication,
+    Quiz, QuizQuestion, QuizAttempt, LessonAssignment, LessonAssignmentSubmission,
 )
 from .serializers import (
     CourseListSerializer, CourseDetailSerializer, EnrollmentSerializer,
@@ -49,7 +50,14 @@ from .serializers import (
     ReviewSerializer, CourseCreateSerializer,
     ModuleSerializer, ModuleWriteSerializer,
     LessonDetailSerializer, LessonWriteSerializer,
+    QuizSerializer, QuizStudentSerializer, QuizQuestionSerializer, QuizAttemptSerializer,
+    LessonAssignmentSerializer, LessonAssignmentSubmissionSerializer,
 )
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from django.http import FileResponse
+
+from .certificate_utils import generate_certificate_file, TemplateNotRenderable
+from apps.affiliates.services import record_conversion_from_cookie as _record_affiliate_conversion
 
 User = get_user_model()
 
@@ -96,6 +104,15 @@ def _is_instructor_admin(user, profile) -> bool:
     return _is_super(profile) or (profile.can_access_instructor and user.is_staff)
 
 
+def _is_lma_admin_or_super(user, profile) -> bool:
+    """True for super instructors OR any Django staff/superuser account (the
+    same IsLMAAdmin check gating admin/students, admin/enrollments,
+    admin/analytics) — used by the course-approval endpoints so the admin
+    "Pending Courses" page works for admins who aren't instructors at all,
+    not just super instructors."""
+    return _is_super(profile) or user.is_staff or user.is_superuser
+
+
 def _lma_token(user):
     """Issues both an access and a refresh token — same pattern as ERP's
     LoginView — so the frontend can silently renew a session instead of
@@ -105,7 +122,14 @@ def _lma_token(user):
 
 
 def _send_safe(subject, message, recipient_list):
-    """send_mail wrapped so email failures never break the main request."""
+    """send_mail wrapped so email failures never break the main request.
+    Skips the attempt entirely (with a warning, not an error) when
+    EMAIL_HOST_USER isn't configured — an empty SMTP username means the
+    connection can't succeed anyway, so there's no point trying and
+    surfacing an avoidable connection-refused/auth-failed traceback."""
+    if not django_settings.EMAIL_HOST_USER:
+        logger.warning('LMA email skipped (EMAIL_HOST_USER not configured): %s', subject)
+        return
     try:
         from_email = getattr(django_settings, 'DEFAULT_FROM_EMAIL', 'info@xerxez.com')
         send_mail(subject, message, from_email, recipient_list, fail_silently=True)
@@ -279,6 +303,7 @@ def lma_login(request):
     log_audit_event(request, 'login_success', username=user.username, source='lma')
     token = _lma_token(user)
     name = user.get_full_name() or user.username
+    affiliate = getattr(user, 'affiliate', None)
 
     return Response({
         'lma_token': token['access'],
@@ -289,6 +314,8 @@ def lma_login(request):
         'instructor_level': profile.instructor_level,
         'name': name,
         'user_id': user.id,
+        'is_affiliate': bool(affiliate and affiliate.status == 'approved'),
+        'affiliate_status': affiliate.status if affiliate else None,
     })
 
 
@@ -400,6 +427,7 @@ def enroll(request, course_id):
     course.total_students += 1
     course.save(update_fields=['total_students'])
     _send_enrollment_emails(request.user, course)
+    _record_affiliate_conversion(request, course, enrollment, created)
 
     return Response(EnrollmentSerializer(enrollment).data, status=201)
 
@@ -420,6 +448,7 @@ def mock_payment(request, course_id):
         course.total_students += 1
         course.save(update_fields=['total_students'])
         _send_enrollment_emails(request.user, course)
+        _record_affiliate_conversion(request, course, enrollment, created)
 
     return Response({
         'success': True,
@@ -485,10 +514,11 @@ def instructor_dashboard(request):
     ).order_by('-created_at')
 
     course_ids = courses.values_list('id', flat=True)
-    pending_submissions = Submission.objects.filter(
+    pending_submissions_qs = Submission.objects.filter(
         assignment__course_id__in=course_ids,
         grade__isnull=True,
-    ).select_related('assignment', 'student')[:20]
+    ).select_related('assignment', 'student')
+    pending_submissions = pending_submissions_qs.order_by('-submitted_at')[:20]
 
     total_students = sum(c.total_students for c in courses)
 
@@ -496,10 +526,27 @@ def instructor_dashboard(request):
         'total_courses': courses.count(),
         'total_students': total_students,
         'pending_reviews': courses.filter(status='pending_review').count(),
+        'assignments_to_grade': pending_submissions_qs.count(),
     }
     if is_super_user:
         total_revenue = sum(float(c.price) * c.total_students for c in courses)
         stats['total_earnings'] = round(total_revenue, 2)
+
+    # Recent activity feed — enrollments, reviews, and assignment submissions
+    # across this instructor's own courses, each capped at 8 and merged/sorted
+    # client-side (each carries its own timestamp for that).
+    recent_enrollments = (
+        Enrollment.objects.filter(course_id__in=course_ids)
+        .select_related('student', 'course').order_by('-enrolled_at')[:8]
+    )
+    recent_reviews = (
+        Review.objects.filter(course_id__in=course_ids)
+        .select_related('student', 'course').order_by('-created_at')[:8]
+    )
+    recent_submissions = (
+        Submission.objects.filter(assignment__course_id__in=course_ids)
+        .select_related('assignment__course', 'student').order_by('-submitted_at')[:8]
+    )
 
     return Response({
         'name': user.get_full_name() or user.username,
@@ -507,6 +554,26 @@ def instructor_dashboard(request):
         'stats': stats,
         'courses': CourseListSerializer(courses, many=True).data,
         'pending_submissions': SubmissionSerializer(pending_submissions, many=True).data,
+        'recent_enrollments': [{
+            'id': e.id,
+            'student_name': e.student.get_full_name() or e.student.username,
+            'course_title': e.course.title,
+            'at': e.enrolled_at.isoformat(),
+        } for e in recent_enrollments],
+        'recent_reviews': [{
+            'id': r.id,
+            'student_name': r.student.get_full_name() or r.student.username,
+            'course_title': r.course.title,
+            'rating': r.rating,
+            'at': r.created_at.isoformat(),
+        } for r in recent_reviews],
+        'recent_submissions': [{
+            'id': s.id,
+            'student_name': s.student.get_full_name() or s.student.username,
+            'course_title': s.assignment.course.title,
+            'assignment_title': s.assignment.title,
+            'at': s.submitted_at.isoformat(),
+        } for s in recent_submissions],
     })
 
 
@@ -588,43 +655,129 @@ def submit_assignment(request, assignment_id):
 @permission_classes([IsAuthenticated])
 def enrollment_status(request, course_id):
     """GET /api/v1/lma/enrollment-status/{course_id}/"""
-    enrolled = Enrollment.objects.filter(student=request.user, course_id=course_id).exists()
-    return Response({'enrolled': enrolled})
+    enrollment = Enrollment.objects.filter(student=request.user, course_id=course_id).first()
+    if not enrollment:
+        return Response({'enrolled': False})
+    certificate = Certificate.objects.filter(student=request.user, course_id=course_id).first()
+    return Response({
+        'enrolled': True,
+        'progress': enrollment.progress,
+        'certificate': CertificateSerializer(certificate, context={'request': request}).data if certificate else None,
+    })
+
+
+def _lesson_view_permission(request, lesson) -> tuple:
+    """Shared access check for lesson content (video, document, player, …).
+    Returns (allowed: bool, error_response: Response | None).
+
+    Order matters: free preview is open to anyone including anonymous
+    visitors; admins (is_staff/is_superuser) bypass enrollment entirely,
+    on ANY course, matching "Admin can preview any lesson from any course"
+    — checked before the enrollment lookup so it never needs one."""
+    if lesson.is_free_preview:
+        return True, None
+    if not request.user.is_authenticated:
+        return False, Response({'error': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
+    user = request.user
+    if user.is_staff or user.is_superuser:
+        return True, None
+    course = lesson.module.course
+    # Only the course's OWN instructor bypasses enrollment here — not "any
+    # instructor account" (profile.can_access_instructor), which would let
+    # an unrelated instructor view another instructor's paid lesson content.
+    is_owner = course.instructor_id == user.id
+    is_enrolled = Enrollment.objects.filter(student=user, course=course).exists()
+    if not (is_enrolled or is_owner):
+        return False, Response({'error': 'Enrollment required to watch this lesson.'}, status=status.HTTP_403_FORBIDDEN)
+    return True, None
 
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def lesson_video_url(request, lesson_id):
-    """GET /api/v1/lma/lessons/{lesson_id}/video/"""
+    """GET /api/v1/lma/lessons/{lesson_id}/video/ — legacy, video-only. Kept
+    for callers still using it; new code should use lesson_player_content."""
     try:
         lesson = Lesson.objects.select_related('module__course').get(id=lesson_id)
     except Lesson.DoesNotExist:
         return Response({'error': 'Lesson not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+    allowed, err = _lesson_view_permission(request, lesson)
+    if not allowed:
+        return err
+
+    video_file_url = request.build_absolute_uri(lesson.video_file.url) if lesson.video_file else None
+    return Response({'video_url': lesson.video_url, 'video_file': video_file_url})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def lesson_player_content(request, lesson_id):
+    """GET /api/v1/lma/lessons/{lesson_id}/player/ — everything a student
+    needs to view ONE lesson's content, regardless of content_type. File
+    fields are returned as absolute URLs (request.build_absolute_uri) so the
+    frontend never has to guess the backend's origin itself."""
+    try:
+        lesson = Lesson.objects.select_related('module__course', 'module').get(id=lesson_id)
+    except Lesson.DoesNotExist:
+        return Response({'error': 'Lesson not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    allowed, err = _lesson_view_permission(request, lesson)
+    if not allowed:
+        return err
+
     course = lesson.module.course
+    is_admin = request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser)
 
-    if lesson.is_free_preview:
-        return Response({'video_url': lesson.video_url})
+    assignment_data = None
+    try:
+        a = lesson.lesson_assignment
+        assignment_data = LessonAssignmentSerializer(a).data
+    except LessonAssignment.DoesNotExist:
+        pass
 
-    if not request.user.is_authenticated:
-        return Response({'error': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
+    return Response({
+        'id': lesson.id,
+        'title': lesson.title,
+        'content_type': lesson.content_type,
+        'duration': lesson.duration,
+        'content': lesson.content,
+        'is_free_preview': lesson.is_free_preview,
+        'is_downloadable': lesson.is_downloadable,
+        'video_url': lesson.video_url,
+        'video_file': request.build_absolute_uri(lesson.video_file.url) if lesson.video_file else None,
+        'document_file': request.build_absolute_uri(lesson.document_file.url) if lesson.document_file else None,
+        'text_content': lesson.text_content,
+        'resources': lesson.resources,
+        'live_session_url': lesson.live_session_url,
+        'live_session_date': lesson.live_session_date,
+        'assignment': assignment_data,
+        'course_id': course.id,
+        'course_title': course.title,
+        'is_admin_preview': is_admin,
+    })
 
-    user = request.user
-    profile = _get_or_create_lma_profile(user)
-    is_instructor = profile.can_access_instructor or course.instructor == user
-    is_enrolled = Enrollment.objects.filter(student=user, course=course).exists()
 
-    if not (is_enrolled or is_instructor):
-        return Response({'error': 'Enrollment required to watch this lesson.'},
-                        status=status.HTTP_403_FORBIDDEN)
+def _issue_certificate_if_complete(student, course):
+    """Get-or-creates the Certificate row for a 100%-complete enrollment and
+    tries to render the PDF immediately. Silently no-ops if the course has
+    no (renderable) template yet — the student can retry from the
+    certificates page later, once the instructor uploads one."""
+    certificate, _created = Certificate.objects.get_or_create(student=student, course=course)
+    if certificate.certificate_file:
+        return certificate
+    try:
+        generate_certificate_file(certificate)
+    except TemplateNotRenderable:
+        pass
+    return certificate
 
-    return Response({'video_url': lesson.video_url})
 
-
-@api_view(['POST'])
+@api_view(['POST', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def lesson_complete(request, lesson_id):
-    """POST /api/v1/lma/lessons/{lesson_id}/complete/"""
+    """POST /api/v1/lma/lessons/{lesson_id}/complete/ marks the lesson done;
+    DELETE unmarks it. Both recompute the enrollment's overall progress."""
     try:
         lesson = Lesson.objects.select_related('module__course').get(id=lesson_id)
     except Lesson.DoesNotExist:
@@ -636,7 +789,10 @@ def lesson_complete(request, lesson_id):
     except Enrollment.DoesNotExist:
         return Response({'error': 'Not enrolled in this course.'}, status=403)
 
-    LessonProgress.objects.get_or_create(student=request.user, lesson=lesson)
+    if request.method == 'DELETE':
+        LessonProgress.objects.filter(student=request.user, lesson=lesson).delete()
+    else:
+        LessonProgress.objects.get_or_create(student=request.user, lesson=lesson)
 
     total_lessons = Lesson.objects.filter(module__course=course).count()
     completed_count = LessonProgress.objects.filter(
@@ -650,17 +806,123 @@ def lesson_complete(request, lesson_id):
         enrollment.completed = True
         if not enrollment.completed_at:
             enrollment.completed_at = timezone.now()
-        Certificate.objects.get_or_create(student=request.user, course=course)
+        _issue_certificate_if_complete(request.user, course)
+    else:
+        enrollment.completed = False
     enrollment.save(update_fields=['progress', 'completed', 'completed_at'])
 
     if enrollment.completed and not was_completed:
         _send_completion_email(request.user, course)
 
     return Response({
-        'completed': True,
+        'completed': request.method != 'DELETE',
         'progress': new_progress,
         'course_completed': enrollment.completed,
     })
+
+
+# ── Certificates ──────────────────────────────────────────────────────────────
+
+def _get_owned_course_or_404(request, course_id):
+    """Fetch a course the current user may manage (their own, or any course
+    if super instructor). Returns (course, None) or (None, Response)."""
+    profile = _get_or_create_lma_profile(request.user)
+    qs = Course.objects.all() if _is_super(profile) else Course.objects.filter(instructor=request.user)
+    try:
+        return qs.get(id=course_id), None
+    except Course.DoesNotExist:
+        return None, Response({'error': 'Course not found.'}, status=404)
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def upload_course_certificate_template(request, course_id):
+    """POST /api/v1/lma/courses/{id}/upload-certificate-template/ — instructor
+    (course owner or super instructor) only. DELETE removes the template."""
+    course, err = _get_owned_course_or_404(request, course_id)
+    if err:
+        return err
+    if request.method == 'DELETE':
+        course.certificate_template.delete(save=False)
+        course.certificate_template = None
+        course.save(update_fields=['certificate_template'])
+        return Response({'certificate_template': None})
+    template_file = request.FILES.get('certificate_template')
+    if not template_file:
+        return Response({'error': 'No certificate_template provided.'}, status=400)
+    allowed_exts = ('.pdf', '.png', '.jpg', '.jpeg')
+    if not template_file.name.lower().endswith(allowed_exts):
+        return Response({'error': 'Certificate template must be a PDF, PNG, or JPG file.'}, status=400)
+    course.certificate_template = template_file
+    course.save(update_fields=['certificate_template'])
+    url = request.build_absolute_uri(course.certificate_template.url)
+    return Response({'certificate_template': url})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_course_certificate_template(request, course_id):
+    """GET /api/v1/lma/courses/{id}/certificate-template/ — instructor only."""
+    course, err = _get_owned_course_or_404(request, course_id)
+    if err:
+        return err
+    if not course.certificate_template:
+        return Response({'certificate_template': None})
+    url = request.build_absolute_uri(course.certificate_template.url)
+    return Response({'certificate_template': url})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def generate_certificate(request, course_id):
+    """POST /api/v1/lma/courses/{id}/generate-certificate/ — the enrolled
+    student generates (or re-fetches) their certificate. Requires every
+    lesson in the course to be completed and a renderable template."""
+    try:
+        course = Course.objects.get(id=course_id)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found.'}, status=404)
+
+    if not Enrollment.objects.filter(student=request.user, course=course).exists():
+        return Response({'error': 'Not enrolled in this course.'}, status=403)
+
+    total_lessons = Lesson.objects.filter(module__course=course).count()
+    completed_count = LessonProgress.objects.filter(
+        student=request.user, lesson__module__course=course
+    ).count()
+    if total_lessons == 0 or completed_count < total_lessons:
+        return Response({'error': 'Complete all lessons to earn your certificate.'}, status=400)
+
+    certificate, _created = Certificate.objects.get_or_create(student=request.user, course=course)
+    if not certificate.certificate_file:
+        try:
+            generate_certificate_file(certificate)
+        except TemplateNotRenderable as exc:
+            return Response({'error': str(exc)}, status=400)
+
+    return Response(CertificateSerializer(certificate, context={'request': request}).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def download_certificate(request, certificate_id):
+    """GET /api/v1/lma/certificates/{id}/download/ — the owning student only."""
+    try:
+        certificate = Certificate.objects.select_related('course', 'student').get(id=certificate_id)
+    except Certificate.DoesNotExist:
+        return Response({'error': 'Certificate not found.'}, status=404)
+    if certificate.student_id != request.user.id and not (request.user.is_staff or request.user.is_superuser):
+        return Response({'error': 'Not authorized to download this certificate.'}, status=403)
+    if not certificate.certificate_file:
+        return Response({'error': 'Certificate has not been generated yet.'}, status=404)
+    filename = f"XERXEZ-Certificate-{certificate.course.title}.pdf"
+    return FileResponse(
+        certificate.certificate_file.open('rb'),
+        as_attachment=True,
+        filename=filename,
+        content_type='application/pdf',
+    )
 
 
 @api_view(['GET'])
@@ -1238,12 +1500,12 @@ def course_modules(request, course_id):
 
     if request.method == 'GET':
         modules = Module.objects.filter(course=course).prefetch_related('lessons').order_by('order')
-        return Response(ModuleSerializer(modules, many=True).data)
+        return Response(ModuleSerializer(modules, many=True, context={'request': request}).data)
 
     serializer = ModuleWriteSerializer(data=request.data)
     if serializer.is_valid():
         module = serializer.save(course=course)
-        return Response(ModuleSerializer(module).data, status=201)
+        return Response(ModuleSerializer(module, context={'request': request}).data, status=201)
     return Response(serializer.errors, status=400)
 
 
@@ -1267,7 +1529,7 @@ def module_detail_view(request, module_id):
     serializer = ModuleWriteSerializer(module, data=request.data, partial=True)
     if serializer.is_valid():
         serializer.save()
-        return Response(ModuleSerializer(module).data)
+        return Response(ModuleSerializer(module, context={'request': request}).data)
     return Response(serializer.errors, status=400)
 
 
@@ -1288,12 +1550,12 @@ def module_lessons(request, module_id):
 
     if request.method == 'GET':
         lessons = Lesson.objects.filter(module=module).order_by('order')
-        return Response(LessonDetailSerializer(lessons, many=True).data)
+        return Response(LessonDetailSerializer(lessons, many=True, context={'request': request}).data)
 
     serializer = LessonWriteSerializer(data=request.data)
     if serializer.is_valid():
         lesson = serializer.save(module=module)
-        return Response(LessonDetailSerializer(lesson).data, status=201)
+        return Response(LessonDetailSerializer(lesson, context={'request': request}).data, status=201)
     return Response(serializer.errors, status=400)
 
 
@@ -1311,7 +1573,7 @@ def lesson_detail_view(request, lesson_id):
         return Response({'error': 'Lesson not found.'}, status=404)
 
     if request.method == 'GET':
-        return Response(LessonDetailSerializer(lesson).data)
+        return Response(LessonDetailSerializer(lesson, context={'request': request}).data)
 
     if request.method == 'DELETE':
         lesson.delete()
@@ -1320,8 +1582,225 @@ def lesson_detail_view(request, lesson_id):
     serializer = LessonWriteSerializer(lesson, data=request.data, partial=True)
     if serializer.is_valid():
         serializer.save()
-        return Response(LessonDetailSerializer(lesson).data)
+        return Response(LessonDetailSerializer(lesson, context={'request': request}).data)
     return Response(serializer.errors, status=400)
+
+
+def _get_owned_lesson_or_404(request, lesson_id):
+    """Fetch a lesson the current user is allowed to edit (their own course,
+    or any course if super instructor). Returns (lesson, None) or (None, Response)."""
+    profile = _get_or_create_lma_profile(request.user)
+    qs = Lesson.objects.select_related('module__course').all()
+    if not _is_super(profile):
+        qs = qs.filter(module__course__instructor=request.user)
+    try:
+        return qs.get(id=lesson_id), None
+    except Lesson.DoesNotExist:
+        return None, Response({'error': 'Lesson not found.'}, status=404)
+
+
+def _student_can_view_lesson(user, lesson) -> bool:
+    """A student can access lesson content (quiz, assignment, video) if the
+    lesson is a free preview, they're enrolled in its course, or they're the
+    course's own instructor (or staff/superuser) — same bypass rule as
+    _lesson_view_permission, kept consistent across every content endpoint."""
+    if lesson.is_free_preview:
+        return True
+    if user.is_authenticated and (user.is_staff or user.is_superuser or lesson.module.course.instructor_id == user.id):
+        return True
+    return Enrollment.objects.filter(student=user, course=lesson.module.course).exists()
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def upload_lesson_video(request, lesson_id):
+    """POST /api/v1/lma/lessons/{id}/upload-video/ — instructor only.
+    DELETE removes the uploaded file (and clears the field) so an instructor
+    can replace or drop a video without re-saving the whole lesson."""
+    lesson, err = _get_owned_lesson_or_404(request, lesson_id)
+    if err:
+        return err
+    if request.method == 'DELETE':
+        lesson.video_file.delete(save=False)
+        lesson.video_file = None
+        lesson.save(update_fields=['video_file'])
+        return Response(LessonDetailSerializer(lesson, context={'request': request}).data)
+    video_file = request.FILES.get('video_file')
+    if not video_file:
+        return Response({'error': 'No video_file provided.'}, status=400)
+    lesson.video_file = video_file
+    lesson.save(update_fields=['video_file'])
+    return Response(LessonDetailSerializer(lesson, context={'request': request}).data)
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def upload_lesson_document(request, lesson_id):
+    """POST /api/v1/lma/lessons/{id}/upload-document/ — instructor only.
+    DELETE removes the uploaded file, same as upload_lesson_video."""
+    lesson, err = _get_owned_lesson_or_404(request, lesson_id)
+    if err:
+        return err
+    if request.method == 'DELETE':
+        lesson.document_file.delete(save=False)
+        lesson.document_file = None
+        lesson.save(update_fields=['document_file'])
+        return Response(LessonDetailSerializer(lesson, context={'request': request}).data)
+    document_file = request.FILES.get('document_file')
+    if not document_file:
+        return Response({'error': 'No document_file provided.'}, status=400)
+    lesson.document_file = document_file
+    lesson.save(update_fields=['document_file'])
+    return Response(LessonDetailSerializer(lesson, context={'request': request}).data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def lesson_quiz(request, lesson_id):
+    """GET/POST /api/v1/lma/lessons/{id}/quiz/
+
+    GET: instructor (owns the lesson) sees full question data including
+    correct answers; a student who can view the lesson sees the quiz with
+    answers withheld. POST: instructor only — creates or fully replaces the
+    quiz and its question set from `{passing_score, questions: [...]}`.
+    """
+    try:
+        lesson = Lesson.objects.select_related('module__course').get(id=lesson_id)
+    except Lesson.DoesNotExist:
+        return Response({'error': 'Lesson not found.'}, status=404)
+
+    is_owner = lesson.module.course.instructor_id == request.user.id
+    profile = _get_or_create_lma_profile(request.user)
+    is_owner = is_owner or _is_super(profile)
+
+    if request.method == 'GET':
+        try:
+            quiz = lesson.quiz
+        except Quiz.DoesNotExist:
+            return Response({'error': 'This lesson has no quiz yet.'}, status=404)
+        if is_owner:
+            return Response(QuizSerializer(quiz).data)
+        if not _student_can_view_lesson(request.user, lesson):
+            return Response({'error': 'Not enrolled in this course.'}, status=403)
+        return Response(QuizStudentSerializer(quiz).data)
+
+    if not is_owner:
+        return Response({'error': 'Instructor access required.'}, status=403)
+
+    passing_score = request.data.get('passing_score', 70)
+    questions = request.data.get('questions', [])
+    # Questions are optional — an instructor can save a quiz shell now and add
+    # questions later via a repeat POST here (this endpoint fully replaces the
+    # question set each call, so re-posting the existing ones plus new ones
+    # is how "add more later" works).
+
+    with transaction.atomic():
+        quiz, _created = Quiz.objects.update_or_create(
+            lesson=lesson, defaults={'passing_score': passing_score},
+        )
+        quiz.questions.all().delete()
+        for i, q in enumerate(questions):
+            qs = QuizQuestionSerializer(data={**q, 'order': q.get('order', i)})
+            if not qs.is_valid():
+                transaction.set_rollback(True)
+                return Response(qs.errors, status=400)
+            qs.save(quiz=quiz)
+
+    lesson.content_type = 'quiz'
+    lesson.save(update_fields=['content_type'])
+    return Response(QuizSerializer(quiz).data, status=201)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def submit_quiz(request, lesson_id):
+    """POST /api/v1/lma/lessons/{id}/quiz/submit/ — student submits answers.
+
+    Body: {"answers": {"<question_id>": "a"|"b"|"c"|"d", ...}}
+    """
+    try:
+        lesson = Lesson.objects.select_related('module__course').get(id=lesson_id)
+    except Lesson.DoesNotExist:
+        return Response({'error': 'Lesson not found.'}, status=404)
+    if not _student_can_view_lesson(request.user, lesson):
+        return Response({'error': 'Not enrolled in this course.'}, status=403)
+    try:
+        quiz = lesson.quiz
+    except Quiz.DoesNotExist:
+        return Response({'error': 'This lesson has no quiz.'}, status=404)
+
+    answers = request.data.get('answers', {})
+    if not isinstance(answers, dict):
+        return Response({'error': 'answers must be an object of {question_id: letter}.'}, status=400)
+
+    questions = list(quiz.questions.all())
+    correct = sum(
+        1 for q in questions
+        if str(answers.get(str(q.id), '')).lower() == q.correct_answer
+    )
+    score = round(100 * correct / len(questions)) if questions else 0
+    passed = score >= quiz.passing_score
+
+    attempt = QuizAttempt.objects.create(
+        quiz=quiz, student=request.user, answers=answers, score=score, passed=passed,
+    )
+    return Response(QuizAttemptSerializer(attempt).data, status=201)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def lesson_assignment(request, lesson_id):
+    """POST /api/v1/lma/lessons/{id}/assignment/ — instructor only.
+    Creates or updates the lesson's assignment."""
+    lesson, err = _get_owned_lesson_or_404(request, lesson_id)
+    if err:
+        return err
+
+    try:
+        existing = lesson.lesson_assignment
+    except LessonAssignment.DoesNotExist:
+        existing = None
+
+    serializer = LessonAssignmentSerializer(existing, data=request.data, partial=bool(existing))
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=400)
+    assignment = serializer.save(lesson=lesson)
+
+    lesson.content_type = 'assignment'
+    lesson.save(update_fields=['content_type'])
+    return Response(LessonAssignmentSerializer(assignment).data, status=201 if not existing else 200)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
+def submit_lesson_assignment(request, assignment_id):
+    """POST /api/v1/lma/lesson-assignments/{id}/submit/ — student submits
+    text/url/code content or a file, depending on the assignment's
+    submission_type. Renamed from the spec's /assignments/{id}/submit/ path
+    to avoid colliding with the existing course-level Assignment/Submission
+    endpoint at that exact path."""
+    try:
+        assignment = LessonAssignment.objects.select_related('lesson__module__course').get(id=assignment_id)
+    except LessonAssignment.DoesNotExist:
+        return Response({'error': 'Assignment not found.'}, status=404)
+    if not _student_can_view_lesson(request.user, assignment.lesson):
+        return Response({'error': 'Not enrolled in this course.'}, status=403)
+
+    content = clean_text(request.data.get('content', '').strip())
+    file = request.FILES.get('file')
+    if assignment.submission_type == 'file' and not file:
+        return Response({'error': 'A file is required for this assignment.'}, status=400)
+    if assignment.submission_type != 'file' and not content:
+        return Response({'error': 'Submission content is required.'}, status=400)
+
+    submission, _created = LessonAssignmentSubmission.objects.update_or_create(
+        assignment=assignment, student=request.user,
+        defaults={'content': content, **({'file': file} if file else {})},
+    )
+    return Response(LessonAssignmentSubmissionSerializer(submission).data, status=201)
 
 
 # ── Instructor — students / reviews / analytics ──────────────────────────────
@@ -1329,18 +1808,16 @@ def lesson_detail_view(request, lesson_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def instructor_students(request):
-    """GET /api/v1/lma/instructor/students/"""
+    """GET /api/v1/lma/instructor/students/ — only students enrolled in
+    THIS instructor's own courses, regardless of instructor tier. Unlike
+    other instructor endpoints, this deliberately has no super-instructor
+    bypass: an instructor's student roster is private to their own courses."""
     profile = _get_or_create_lma_profile(request.user)
     if not profile.can_access_instructor:
         return Response({'error': 'Instructor access required.'}, status=403)
 
-    course_qs = (
-        Course.objects.all() if _is_super(profile)
-        else Course.objects.filter(instructor=request.user)
-    )
-    course_ids = course_qs.values_list('id', flat=True)
     enrollments = (
-        Enrollment.objects.filter(course_id__in=course_ids)
+        Enrollment.objects.filter(course__instructor=request.user)
         .select_related('student', 'course')
         .order_by('-enrolled_at')
     )
@@ -1986,10 +2463,10 @@ def submit_for_review(request, course_id):
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated])
 def publish_course(request, course_id):
-    """PUT /api/v1/lma/courses/{id}/publish/ — super only."""
+    """PUT /api/v1/lma/courses/{id}/publish/ — super instructor or LMA admin."""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_lma_admin_or_super(request.user, profile):
+        return Response({'error': 'Super instructor or admin access required.'}, status=403)
 
     try:
         course = Course.objects.select_related('instructor').get(id=course_id)
@@ -2034,10 +2511,10 @@ def publish_course(request, course_id):
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated])
 def reject_course(request, course_id):
-    """PUT /api/v1/lma/courses/{id}/reject/ — super only."""
+    """PUT /api/v1/lma/courses/{id}/reject/ — super instructor or LMA admin."""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_lma_admin_or_super(request.user, profile):
+        return Response({'error': 'Super instructor or admin access required.'}, status=403)
 
     try:
         course = Course.objects.select_related('instructor').get(id=course_id)
@@ -2131,8 +2608,8 @@ def mark_all_notifications_read(request):
 def pending_review_queue(request):
     """GET /api/v1/lma/instructor/pending-reviews/"""
     profile = _get_or_create_lma_profile(request.user)
-    if not _is_super(profile):
-        return Response({'error': 'Super instructor access required.'}, status=403)
+    if not _is_lma_admin_or_super(request.user, profile):
+        return Response({'error': 'Super instructor or admin access required.'}, status=403)
 
     courses = Course.objects.filter(
         status='pending_review'
@@ -2169,31 +2646,77 @@ def _get_super_users():
     ).distinct()
 
 
+EXPERTISE_CHOICES = ('AI & ML', 'DevSecOps', 'Cloud', 'Web Dev', 'Data Science', 'Business', 'Other')
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @throttle_classes([BecomeInstructorRateThrottle])
 def become_instructor(request):
     """POST /api/v1/lma/become-instructor/ — public, no auth required."""
-    full_name = clean_text(request.data.get('full_name', '').strip())
-    email     = request.data.get('email', '').strip().lower()
-    phone     = clean_text(request.data.get('phone', '').strip())
-    expertise = clean_text(request.data.get('expertise', '').strip())
-    bio       = clean_text(request.data.get('bio', '').strip())
-    why_teach = clean_text(request.data.get('why_teach', '').strip())
-    password  = request.data.get('password', '')
+    applicant_type = request.data.get('applicant_type', 'individual').strip()
+    company_size   = clean_text(request.data.get('company_size', '').strip())
+    full_name    = clean_text(request.data.get('full_name', '').strip())
+    company_name = clean_text(request.data.get('company_name', '').strip())
+    email        = request.data.get('email', '').strip().lower()
+    phone        = clean_text(request.data.get('phone', '').strip())
+    linkedin_url = request.data.get('linkedin_url', '').strip()
+    website      = request.data.get('website', '').strip()
+    expertise    = request.data.get('expertise', '').strip()
+    years_experience = request.data.get('years_experience', 0)
+    bio          = clean_text(request.data.get('bio', '').strip())
+    previous_teaching_experience = bool(request.data.get('previous_teaching_experience'))
+    why_teach    = clean_text(request.data.get('why_teach', '').strip())
+    proposed_course_title = clean_text(request.data.get('proposed_course_title', '').strip())
+    course_description     = clean_text(request.data.get('course_description', '').strip())
+    target_audience         = clean_text(request.data.get('target_audience', '').strip())
+    estimated_duration      = clean_text(request.data.get('estimated_duration', '').strip())
+    agree_terms    = bool(request.data.get('agree_terms'))
+    confirm_rights = bool(request.data.get('confirm_rights'))
+    password     = request.data.get('password', '')
 
-    if not full_name or not email or not phone or not bio or not why_teach:
-        return Response({'error': 'Full name, email, phone, bio, and why_teach are required.'}, status=400)
+    required = {
+        'Full name': full_name, 'Email': email, 'Phone': phone,
+        'Bio': bio, 'Why teach': why_teach,
+        'Proposed course title': proposed_course_title,
+        'Course description': course_description,
+        'Target audience': target_audience,
+        'Estimated duration': estimated_duration,
+    }
+    if applicant_type not in ('individual', 'company'):
+        return Response({'error': 'applicant_type must be "individual" or "company".'}, status=400)
+    if applicant_type == 'company':
+        required['Company name'] = company_name
+        required['Company size'] = company_size
+    missing = [label for label, value in required.items() if not value]
+    if missing:
+        return Response({'error': f'{", ".join(missing)} {"is" if len(missing) == 1 else "are"} required.'}, status=400)
     if not password or len(password) < 6:
         return Response({'error': 'Password must be at least 6 characters.'}, status=400)
     if not _re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
         return Response({'error': 'Enter a valid email address.'}, status=400)
-    if len(_re.sub(r'\D', '', phone)) < 10:
-        return Response({'error': 'Please enter a valid phone number (min 10 digits).'}, status=400)
-    if len(bio) < 30:
-        return Response({'error': 'Bio must be at least 30 characters.'}, status=400)
-    if len(why_teach) < 50:
-        return Response({'error': 'Why-teach must be at least 50 characters.'}, status=400)
+    # `phone` arrives as "+<country code><national number>" from the frontend's
+    # country-code picker — a loose 8-15 total-digit bound (E.164 max length)
+    # is the right server-side check; per-country digit rules are enforced
+    # client-side where the selected country is known.
+    if not phone.startswith('+') or not (8 <= len(_re.sub(r'\D', '', phone)) <= 15):
+        return Response({'error': 'Please enter a valid phone number.'}, status=400)
+    if expertise not in EXPERTISE_CHOICES:
+        return Response({'error': 'Select a valid area of expertise.'}, status=400)
+    try:
+        years_experience = int(years_experience)
+    except (TypeError, ValueError):
+        return Response({'error': 'Years of experience must be a number.'}, status=400)
+    if len(bio) < 10:
+        return Response({'error': 'Bio must be at least 10 characters.'}, status=400)
+    if len(bio) > 500:
+        return Response({'error': 'Bio must be at most 500 characters.'}, status=400)
+    if len(why_teach) < 10:
+        return Response({'error': 'Why-teach must be at least 10 characters.'}, status=400)
+    if len(why_teach) > 500:
+        return Response({'error': 'Why-teach must be at most 500 characters.'}, status=400)
+    if not agree_terms or not confirm_rights:
+        return Response({'error': 'You must agree to the terms and confirm content ownership.'}, status=400)
 
     if InstructorApplication.objects.filter(email=email).exists():
         return Response({'error': 'An application with this email already exists.'}, status=400)
@@ -2202,8 +2725,14 @@ def become_instructor(request):
 
     from django.contrib.auth.hashers import make_password
     app = InstructorApplication.objects.create(
-        full_name=full_name, email=email, phone=phone,
-        expertise=expertise, bio=bio, why_teach=why_teach,
+        applicant_type=applicant_type, company_size=company_size,
+        full_name=full_name, company_name=company_name, email=email, phone=phone,
+        linkedin_url=linkedin_url, website=website,
+        expertise=expertise, years_experience=years_experience, bio=bio,
+        previous_teaching_experience=previous_teaching_experience, why_teach=why_teach,
+        proposed_course_title=proposed_course_title, course_description=course_description,
+        target_audience=target_audience, estimated_duration=estimated_duration,
+        agree_terms=agree_terms, confirm_rights=confirm_rights,
         password_hash=make_password(password),
     )
 
@@ -2215,19 +2744,41 @@ def become_instructor(request):
             message=f'{full_name} ({email}) has applied to become an instructor.',
         )
 
-    # Email super instructors
+    # Two notification emails on submit — sent independently of each other so
+    # one failing (e.g. a bad recipient address) never blocks the other, and
+    # neither ever surfaces to the user: the application is already saved by
+    # this point, and a broken SMTP config shouldn't turn into a 500 for the
+    # applicant. Each failure is logged silently instead.
+    applicant_label = company_name or full_name
+    # Two notification emails on submit — sent independently of each other so
+    # one failing never blocks the other, and neither ever surfaces to the
+    # user or blocks the response: the application is already saved above,
+    # and a broken/unconfigured email setup shouldn't turn into a 500 for
+    # the applicant. _send_safe wraps send_mail in try/except and skips
+    # entirely (just a warning) if EMAIL_HOST_USER isn't configured.
     _send_safe(
-        subject=f'[Xerxez LMA] New Instructor Application from {full_name}',
+        subject='We received your instructor application',
         message=(
-            f'Hello,\n\n'
-            f'{full_name} ({email}) has submitted an instructor application.\n\n'
-            f'Expertise: {expertise or "Not specified"}\n\n'
+            f'Hi {full_name}, thank you for applying. '
+            f"We'll review within 2-3 business days and contact you at this email."
+        ),
+        recipient_list=[email],
+    )
+    _send_safe(
+        subject=f'New instructor application from {applicant_label}',
+        message=(
+            f'Full name: {full_name}\n'
+            f'Company: {company_name or "Not specified"}\n'
+            f'Email: {email}\n'
+            f'Phone: {phone}\n'
+            f'Expertise: {expertise or "Not specified"} ({years_experience} yrs)\n'
+            f'Proposed course: {proposed_course_title}\n\n'
+            f'Course description:\n{course_description}\n\n'
             f'Bio:\n{bio}\n\n'
             f'Why teach:\n{why_teach}\n\n'
-            f'Log in to the instructor dashboard → Applications to review.\n\n'
-            f'— Xerxez LMA'
+            f'Review it here: https://xerxez.com/lma/instructor/dashboard'
         ),
-        recipient_list=SUPER_INSTRUCTOR_EMAILS,
+        recipient_list=['info@xerxez.com'],
     )
 
     return Response({'success': True, 'application_id': app.id}, status=201)
@@ -2249,12 +2800,23 @@ def list_applications(request):
     pending_count = InstructorApplication.objects.filter(status='pending').count()
     data = [{
         'id': a.id,
+        'applicant_type': a.applicant_type,
+        'company_size': a.company_size,
         'full_name': a.full_name,
+        'company_name': a.company_name,
         'email': a.email,
         'phone': a.phone,
+        'linkedin_url': a.linkedin_url,
+        'website': a.website,
         'expertise': a.expertise,
+        'years_experience': a.years_experience,
         'bio': a.bio,
+        'previous_teaching_experience': a.previous_teaching_experience,
         'why_teach': a.why_teach,
+        'proposed_course_title': a.proposed_course_title,
+        'course_description': a.course_description,
+        'target_audience': a.target_audience,
+        'estimated_duration': a.estimated_duration,
         'status': a.status,
         'rejection_reason': a.rejection_reason,
         'applied_at': a.applied_at.isoformat(),
@@ -2262,6 +2824,23 @@ def list_applications(request):
         'reviewed_by': a.reviewed_by.get_full_name() or a.reviewed_by.username if a.reviewed_by else None,
     } for a in qs]
     return Response({'applications': data, 'pending_count': pending_count})
+
+
+def _promote_to_instructor_profile(user, app):
+    """Give `user` a regular-instructor LMAProfile carrying the application's
+    bio and partner-branding fields. Shared by both approval paths (new
+    account and reinstated account) so they can never drift apart."""
+    profile, _ = LMAProfile.objects.get_or_create(user=user)
+    profile.lma_role = 'instructor'
+    profile.can_access_student = False
+    profile.can_access_instructor = True
+    profile.instructor_level = 'regular'
+    profile.bio = app.bio
+    profile.company_name = app.company_name
+    profile.website = app.website
+    profile.linkedin_url = app.linkedin_url
+    profile.save()
+    return profile
 
 
 @api_view(['POST'])
@@ -2280,30 +2859,28 @@ def approve_application(request, app_id):
     import secrets
     import string
 
+    # If the applicant chose a password at apply time, reuse its stored hash;
+    # otherwise generate a temporary one to email.
+    alphabet = string.ascii_letters + string.digits + '!@#$'
+    raw_password = ''.join(secrets.choice(alphabet) for _ in range(14))
+    use_chosen = bool(app.password_hash)
+    password_line = 'the password you chose when applying' if use_chosen else raw_password
+
     existing_user = User.objects.filter(email=app.email).first()
 
     if existing_user:
         # Re-approving a previously rejected application whose account already exists —
         # re-activate the account, restore instructor profile, and send a new temp password.
-        import secrets as _sec
-        alphabet = string.ascii_letters + string.digits + '!@#$'
-        raw_password = ''.join(_sec.choice(alphabet) for _ in range(14))
-        reuse_chosen = bool(app.password_hash)
         try:
             with transaction.atomic():
                 existing_user.is_active = True
-                if reuse_chosen:
+                if use_chosen:
                     existing_user.password = app.password_hash
                 else:
                     existing_user.set_password(raw_password)
                 existing_user.save(update_fields=['is_active', 'password'])
 
-                lma_profile, _ = LMAProfile.objects.get_or_create(user=existing_user)
-                lma_profile.lma_role = 'instructor'
-                lma_profile.can_access_student = False
-                lma_profile.can_access_instructor = True
-                lma_profile.instructor_level = 'regular'
-                lma_profile.save()
+                _promote_to_instructor_profile(existing_user, app)
 
                 app.status = 'approved'
                 app.rejection_reason = ''
@@ -2320,9 +2897,8 @@ def approve_application(request, app_id):
                 f'Great news! Your instructor application has been approved and your account has been reinstated.\n\n'
                 f'Your login credentials:\n'
                 f'  Email: {app.email}\n'
-                + ('  Password: the password you chose when applying\n\n' if reuse_chosen
-                   else f'  Password: {raw_password}\n\n')
-                + f'Sign in at: https://xerxez.com/lma/login\n\n'
+                f'  Password: {password_line}\n\n'
+                f'Sign in at: https://xerxez.com/lma/login\n\n'
                 f'Please change your password after first login.\n\n'
                 f'— XERXEZ Academy Team'
             ),
@@ -2335,12 +2911,6 @@ def approve_application(request, app_id):
         })
 
     # Fresh approval — create brand-new instructor account.
-    # If the applicant chose a password at apply time, reuse its stored hash;
-    # otherwise generate a temporary one to email.
-    alphabet = string.ascii_letters + string.digits + '!@#$'
-    raw_password = ''.join(secrets.choice(alphabet) for _ in range(14))
-    use_chosen = bool(app.password_hash)
-
     base = _re.sub(r'[^a-z0-9_]', '', app.email.split('@')[0]) or 'instructor'
     username, n = base, 1
     while User.objects.filter(username=username).exists():
@@ -2361,13 +2931,7 @@ def approve_application(request, app_id):
             user._skip_profile_signal = True
             user.save()
 
-            lma_profile, _ = LMAProfile.objects.get_or_create(user=user)
-            lma_profile.lma_role = 'instructor'
-            lma_profile.can_access_student = False
-            lma_profile.can_access_instructor = True
-            lma_profile.instructor_level = 'regular'
-            lma_profile.bio = app.bio
-            lma_profile.save()
+            _promote_to_instructor_profile(user, app)
 
             app.status = 'approved'
             app.reviewed_at = timezone.now()
@@ -2376,23 +2940,14 @@ def approve_application(request, app_id):
     except Exception as exc:
         return Response({'error': f'Could not create instructor account: {exc}'}, status=400)
 
-    if use_chosen:
-        cred_lines = (
-            f'  Email: {app.email}\n'
-            f'  Password: the password you chose when applying\n\n'
-        )
-    else:
-        cred_lines = (
-            f'  Email: {app.email}\n'
-            f'  Password: {raw_password}\n\n'
-        )
     _send_safe(
-        subject='Welcome to XERXEZ Academy — Your Instructor Account',
+        subject='Welcome to XERXEZ Academy — Your Instructor Account is Ready',
         message=(
             f'Hi {app.full_name},\n\n'
             f'Congratulations! Your application to teach on XERXEZ Academy has been approved.\n\n'
             f'Your login credentials:\n'
-            + cred_lines +
+            f'  Email: {app.email}\n'
+            f'  Password: {password_line}\n\n'
             f'Sign in at: https://xerxez.com/lma/login\n\n'
             f'Welcome to the team!\n\n'
             f'— XERXEZ Academy Team'
@@ -2450,7 +3005,7 @@ def reject_application(request, app_id):
     app.save(update_fields=['status', 'rejection_reason', 'reviewed_at', 'reviewed_by'])
 
     _send_safe(
-        subject='Your XERXEZ Academy Instructor Application',
+        subject='XERXEZ Academy Application Update',
         message=(
             f'Hi {app.full_name},\n\n'
             f'Thank you for applying to teach on XERXEZ Academy.\n\n'
