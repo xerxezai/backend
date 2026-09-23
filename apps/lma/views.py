@@ -3,6 +3,8 @@ LMA (Learning Management Application) Views
 """
 import logging
 
+import razorpay
+from razorpay.errors import SignatureVerificationError
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.conf import settings as django_settings
@@ -26,7 +28,7 @@ class IsLMAAdmin(BasePermission):
         user = request.user
         return bool(user and user.is_authenticated and (user.is_staff or user.is_superuser))
 
-from apps.core.email import send_via_resend
+from apps.core.email import send_via_resend, render_v2_email, v2_detail_table, v2_message_box
 from apps.core.sanitize import clean_text
 from apps.core.throttles import LoginRateThrottle
 from apps.core.audit import log_audit_event
@@ -144,20 +146,25 @@ def _send_safe(subject, message, recipient_list):
 LMA_FROM_EMAIL = 'onboarding@resend.dev'
 LMA_ADMIN_EMAIL = getattr(django_settings, 'CONTACT_ADMIN_EMAIL', 'info@xerxez.com')
 
+# v2 theme — navy header/footer, white card, red accents. Kept as its own
+# named CSS block (rather than switching every call site to render_v2_email
+# directly) so the existing .detail-box-style body_html markup at each of
+# this shell's 4 call sites (enrollment, course-completed, instructor
+# assignment) keeps working unchanged.
 _EMAIL_STYLE = """
-  body{font-family:'Segoe UI',Arial,sans-serif;background:#F2EFE9;margin:0;padding:0}
-  .wrap{max-width:580px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;
-        box-shadow:0 4px 32px rgba(0,0,0,.10)}
-  .hdr{background:#1a1a1a;padding:36px 40px;text-align:center}
-  .hdr h1{color:#D4A853;font-family:Georgia,serif;font-size:22px;margin:0 0 4px;letter-spacing:.04em}
-  .hdr p{color:rgba(255,255,255,.55);font-size:13px;margin:0}
-  .body{padding:36px 40px;font-size:14px;color:#333;line-height:1.74}
-  .detail-box{background:#fafaf8;border-radius:10px;border:1px solid #f0ede8;border-left:3px solid #D4A853;
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#F4F7FA;margin:0;padding:0}
+  .wrap{max-width:600px;margin:32px auto;background:#fff;border-radius:8px;overflow:hidden;
+        box-shadow:0 4px 24px rgba(7,26,51,.08)}
+  .hdr{background:#071a33;padding:28px 36px;text-align:center}
+  .hdr h1{color:#fff;font-family:'Segoe UI',Arial,sans-serif;font-size:22px;font-weight:800;margin:0;letter-spacing:.04em}
+  .hdr p{color:rgba(255,255,255,.55);font-size:13px;margin:6px 0 0}
+  .body{padding:36px 36px 8px;font-size:14px;color:#4b5563;line-height:1.7}
+  .detail-box{background:#F4F7FA;border-radius:8px;border-left:3px solid #D93522;
               padding:16px 20px;margin:20px 0;font-size:13px}
-  .detail-box p{margin:4px 0;color:#5a5650}
-  .detail-box strong{color:#1a1a1a}
-  .ftr{background:#1a1a1a;border-top:1px solid #2c2c2c;padding:18px 40px;
-       text-align:center;font-size:12px;color:rgba(255,255,255,.45)}
+  .detail-box p{margin:4px 0;color:#4b5563}
+  .detail-box strong{color:#071a33}
+  .ftr{background:#071a33;padding:18px 36px;
+       text-align:center;font-size:12px;color:rgba(255,255,255,.55)}
 """
 
 
@@ -169,7 +176,8 @@ def _lma_email_shell(heading: str, body_html: str) -> str:
 <div class="wrap">
   <div class="hdr"><h1>XERXEZ</h1><p>{heading}</p></div>
   <div class="body">{body_html}</div>
-  <div class="ftr">XERXEZ Academy &nbsp;·&nbsp; info@xerxez.com &nbsp;·&nbsp; xerxez.com</div>
+  <div style="height:20px"></div>
+  <div class="ftr">© 2026 XERXEZ. All rights reserved.</div>
 </div>
 </body>
 </html>"""
@@ -304,6 +312,10 @@ def lma_login(request):
     token = _lma_token(user)
     name = user.get_full_name() or user.username
     affiliate = getattr(user, 'affiliate', None)
+    # Staff/superuser accounts get affiliate-dashboard access even without
+    # their own Affiliate row — apps.affiliates.views serves them a
+    # platform-wide aggregate there instead of a personal profile.
+    is_admin = bool(user.is_staff or user.is_superuser)
 
     return Response({
         'lma_token': token['access'],
@@ -314,7 +326,9 @@ def lma_login(request):
         'instructor_level': profile.instructor_level,
         'name': name,
         'user_id': user.id,
-        'is_affiliate': bool(affiliate and affiliate.status == 'approved'),
+        'is_staff': user.is_staff,
+        'is_superuser': user.is_superuser,
+        'is_affiliate': bool(affiliate and affiliate.status == 'approved') or is_admin,
         'affiliate_status': affiliate.status if affiliate else None,
     })
 
@@ -427,7 +441,7 @@ def enroll(request, course_id):
     course.total_students += 1
     course.save(update_fields=['total_students'])
     _send_enrollment_emails(request.user, course)
-    _record_affiliate_conversion(request, course, enrollment, created)
+    _record_affiliate_conversion(request, course, enrollment, created, ref_code=request.data.get('affiliate_ref'))
 
     return Response(EnrollmentSerializer(enrollment).data, status=201)
 
@@ -448,13 +462,114 @@ def mock_payment(request, course_id):
         course.total_students += 1
         course.save(update_fields=['total_students'])
         _send_enrollment_emails(request.user, course)
-        _record_affiliate_conversion(request, course, enrollment, created)
+        _record_affiliate_conversion(request, course, enrollment, created, ref_code=request.data.get('affiliate_ref'))
 
     return Response({
         'success': True,
         'message': f'Payment successful! You are now enrolled in "{course.title}".',
         'enrollment': EnrollmentSerializer(enrollment).data,
     })
+
+
+def _get_razorpay_client():
+    return razorpay.Client(auth=(django_settings.RAZORPAY_KEY_ID, django_settings.RAZORPAY_KEY_SECRET))
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_order(request, course_id):
+    """POST /api/v1/lma/courses/{course_id}/create-order/ — creates a
+    Razorpay order for a paid course. Amount is converted to paise (Razorpay's
+    smallest currency unit) — course.price is stored in rupees."""
+    try:
+        course = Course.objects.get(id=course_id)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found.'}, status=404)
+
+    if not course.price or course.price <= 0:
+        return Response({'error': 'This course is free — enroll directly instead.'}, status=400)
+
+    if Enrollment.objects.filter(student=request.user, course=course).exists():
+        return Response({'error': 'Already enrolled.'}, status=400)
+
+    if not django_settings.RAZORPAY_KEY_ID or not django_settings.RAZORPAY_KEY_SECRET:
+        return Response({'error': 'Payments are not configured on this server.'}, status=503)
+
+    amount_paise = int(course.price * 100)
+    try:
+        order = _get_razorpay_client().order.create({
+            'amount': amount_paise,
+            'currency': 'INR',
+            'receipt': f'lma-course-{course.id}-user-{request.user.id}',
+            'notes': {'course_id': str(course.id), 'student_id': str(request.user.id)},
+        })
+    except Exception:
+        logger.exception('Razorpay order creation failed for course=%s user=%s', course.id, request.user.id)
+        return Response({'error': 'Could not create payment order. Please try again.'}, status=502)
+
+    return Response({
+        'order_id': order['id'],
+        'amount': amount_paise,
+        'currency': 'INR',
+        'key': django_settings.RAZORPAY_KEY_ID,
+        'course_title': course.title,
+        'course_price': str(course.price),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_payment(request, course_id):
+    """POST /api/v1/lma/courses/{course_id}/verify-payment/ — verifies the
+    Razorpay checkout signature and only enrolls the student once that
+    verification passes. A forged or mismatched signature never enrolls
+    anyone, regardless of what the request body claims."""
+    try:
+        course = Course.objects.get(id=course_id)
+    except Course.DoesNotExist:
+        return Response({'error': 'Course not found.'}, status=404)
+
+    order_id = request.data.get('razorpay_order_id')
+    payment_id = request.data.get('razorpay_payment_id')
+    signature = request.data.get('razorpay_signature')
+    if not order_id or not payment_id or not signature:
+        return Response({'error': 'Missing payment verification details.'}, status=400)
+
+    try:
+        _get_razorpay_client().utility.verify_payment_signature({
+            'razorpay_order_id': order_id,
+            'razorpay_payment_id': payment_id,
+            'razorpay_signature': signature,
+        })
+    except SignatureVerificationError:
+        return Response({'error': 'Payment verification failed. Please contact support if the amount was deducted.'}, status=400)
+
+    enrollment, created = Enrollment.objects.get_or_create(
+        student=request.user, course=course,
+        defaults={
+            'razorpay_order_id': order_id,
+            'razorpay_payment_id': payment_id,
+            'amount_paid': course.price,
+        },
+    )
+    if created:
+        course.total_students += 1
+        course.save(update_fields=['total_students'])
+        _send_enrollment_emails(request.user, course)
+        _record_affiliate_conversion(request, course, enrollment, created, ref_code=request.data.get('affiliate_ref'))
+    elif not enrollment.razorpay_payment_id:
+        # Already enrolled somehow (e.g. a retried verify call) — still record
+        # the payment trail rather than silently dropping it.
+        enrollment.razorpay_order_id = order_id
+        enrollment.razorpay_payment_id = payment_id
+        enrollment.amount_paid = course.price
+        enrollment.save(update_fields=['razorpay_order_id', 'razorpay_payment_id', 'amount_paid'])
+
+    return Response({
+        'success': True,
+        'message': f'Payment successful! You are now enrolled in "{course.title}".',
+        'enrollment': EnrollmentSerializer(enrollment).data,
+    }, status=201 if created else 200)
 
 
 # ── Student ─────────────────────────────────────────────────────────────────
@@ -2752,33 +2867,45 @@ def become_instructor(request):
     applicant_label = company_name or full_name
     # Two notification emails on submit — sent independently of each other so
     # one failing never blocks the other, and neither ever surfaces to the
-    # user or blocks the response: the application is already saved above,
-    # and a broken/unconfigured email setup shouldn't turn into a 500 for
-    # the applicant. _send_safe wraps send_mail in try/except and skips
-    # entirely (just a warning) if EMAIL_HOST_USER isn't configured.
-    _send_safe(
-        subject='We received your instructor application',
-        message=(
-            f'Hi {full_name}, thank you for applying. '
-            f"We'll review within 2-3 business days and contact you at this email."
-        ),
-        recipient_list=[email],
+    # user or blocks the response: the application is already saved above.
+    # send_via_resend never raises (falls back to SMTP, then just logs a
+    # warning if that's unconfigured too).
+    applicant_body = (
+        f'<p>Hi {full_name}, thank you for applying. '
+        f"We'll review within 2-3 business days and contact you at this email.</p>"
     )
-    _send_safe(
-        subject=f'New instructor application from {applicant_label}',
-        message=(
-            f'Full name: {full_name}\n'
-            f'Company: {company_name or "Not specified"}\n'
-            f'Email: {email}\n'
-            f'Phone: {phone}\n'
-            f'Expertise: {expertise or "Not specified"} ({years_experience} yrs)\n'
-            f'Proposed course: {proposed_course_title}\n\n'
-            f'Course description:\n{course_description}\n\n'
-            f'Bio:\n{bio}\n\n'
-            f'Why teach:\n{why_teach}\n\n'
+    send_via_resend(
+        to=email, subject='We received your instructor application',
+        html=render_v2_email(title='Application received', body_html=applicant_body),
+        text=f"Hi {full_name}, thank you for applying. We'll review within 2-3 business days and contact you at this email.",
+        from_email=LMA_FROM_EMAIL,
+    )
+
+    admin_rows = [
+        ('Full Name', full_name), ('Company', company_name or 'Not specified'),
+        ('Email', email), ('Phone', phone),
+        ('Expertise', f'{expertise or "Not specified"} ({years_experience} yrs)'),
+        ('Proposed Course', proposed_course_title),
+    ]
+    admin_body = (
+        v2_detail_table(admin_rows)
+        + f'<p style="font-weight:700;color:#071a33;margin:18px 0 6px">Course Description</p>' + v2_message_box(course_description)
+        + f'<p style="font-weight:700;color:#071a33;margin:18px 0 6px">Bio</p>' + v2_message_box(bio)
+        + f'<p style="font-weight:700;color:#071a33;margin:18px 0 6px">Why Teach</p>' + v2_message_box(why_teach)
+    )
+    send_via_resend(
+        to='info@xerxez.com', subject=f'New instructor application from {applicant_label}',
+        html=render_v2_email(
+            title='New Instructor Application', body_html=admin_body,
+            cta_label='Review Application', cta_url='https://xerxez.com/lma/instructor/dashboard',
+        ),
+        text=(
+            f'Full name: {full_name}\nCompany: {company_name or "Not specified"}\nEmail: {email}\nPhone: {phone}\n'
+            f'Expertise: {expertise or "Not specified"} ({years_experience} yrs)\nProposed course: {proposed_course_title}\n\n'
+            f'Course description:\n{course_description}\n\nBio:\n{bio}\n\nWhy teach:\n{why_teach}\n\n'
             f'Review it here: https://xerxez.com/lma/instructor/dashboard'
         ),
-        recipient_list=['info@xerxez.com'],
+        from_email=LMA_FROM_EMAIL,
     )
 
     return Response({'success': True, 'application_id': app.id}, status=201)
@@ -2890,19 +3017,25 @@ def approve_application(request, app_id):
         except Exception as exc:
             return Response({'error': f'Could not restore instructor account: {exc}'}, status=400)
 
-        _send_safe(
-            subject='XERXEZ Academy — Your Instructor Access Has Been Reinstated',
-            message=(
-                f'Hi {app.full_name},\n\n'
-                f'Great news! Your instructor application has been approved and your account has been reinstated.\n\n'
-                f'Your login credentials:\n'
-                f'  Email: {app.email}\n'
-                f'  Password: {password_line}\n\n'
-                f'Sign in at: https://xerxez.com/lma/login\n\n'
-                f'Please change your password after first login.\n\n'
+        reinstate_body = (
+            f'<p>Hi {app.full_name},</p>'
+            f'<p>Great news! Your instructor application has been approved and your account has been reinstated.</p>'
+            + v2_detail_table([('Email', app.email), ('Password', password_line)])
+            + '<p style="color:#9ca3af;font-size:13px">Please change your password after first login.</p>'
+        )
+        send_via_resend(
+            to=app.email, subject='XERXEZ Academy — Your Instructor Access Has Been Reinstated',
+            html=render_v2_email(
+                title='Access reinstated', body_html=reinstate_body,
+                cta_label='Sign In', cta_url='https://xerxez.com/lma/login',
+            ),
+            text=(
+                f'Hi {app.full_name},\n\nGreat news! Your instructor application has been approved and your '
+                f'account has been reinstated.\n\nYour login credentials:\n  Email: {app.email}\n  Password: {password_line}\n\n'
+                f'Sign in at: https://xerxez.com/lma/login\n\nPlease change your password after first login.\n\n'
                 f'— XERXEZ Academy Team'
             ),
-            recipient_list=[app.email],
+            from_email=LMA_FROM_EMAIL,
         )
         return Response({
             'success': True,
@@ -2940,19 +3073,24 @@ def approve_application(request, app_id):
     except Exception as exc:
         return Response({'error': f'Could not create instructor account: {exc}'}, status=400)
 
-    _send_safe(
-        subject='Welcome to XERXEZ Academy — Your Instructor Account is Ready',
-        message=(
-            f'Hi {app.full_name},\n\n'
-            f'Congratulations! Your application to teach on XERXEZ Academy has been approved.\n\n'
-            f'Your login credentials:\n'
-            f'  Email: {app.email}\n'
-            f'  Password: {password_line}\n\n'
-            f'Sign in at: https://xerxez.com/lma/login\n\n'
-            f'Welcome to the team!\n\n'
-            f'— XERXEZ Academy Team'
+    approve_body = (
+        f'<p>Hi {app.full_name},</p>'
+        f'<p>Congratulations! Your application to teach on XERXEZ Academy has been approved.</p>'
+        + v2_detail_table([('Email', app.email), ('Password', password_line)])
+        + '<p>Welcome to the team!</p>'
+    )
+    send_via_resend(
+        to=app.email, subject='Welcome to XERXEZ Academy — Your Instructor Account is Ready',
+        html=render_v2_email(
+            title="You're approved!", body_html=approve_body,
+            cta_label='Sign In', cta_url='https://xerxez.com/lma/login',
         ),
-        recipient_list=[app.email],
+        text=(
+            f'Hi {app.full_name},\n\nCongratulations! Your application to teach on XERXEZ Academy has been approved.\n\n'
+            f'Your login credentials:\n  Email: {app.email}\n  Password: {password_line}\n\n'
+            f'Sign in at: https://xerxez.com/lma/login\n\nWelcome to the team!\n\n— XERXEZ Academy Team'
+        ),
+        from_email=LMA_FROM_EMAIL,
     )
 
     return Response({
@@ -3004,17 +3142,24 @@ def reject_application(request, app_id):
     app.reviewed_by = request.user
     app.save(update_fields=['status', 'rejection_reason', 'reviewed_at', 'reviewed_by'])
 
-    _send_safe(
-        subject='XERXEZ Academy Application Update',
-        message=(
-            f'Hi {app.full_name},\n\n'
-            f'Thank you for applying to teach on XERXEZ Academy.\n\n'
+    reject_body = (
+        f'<p>Hi {app.full_name},</p>'
+        f'<p>Thank you for applying to teach on XERXEZ Academy. After careful review, we are unable to '
+        f'approve your application at this time.</p>'
+        f'<p style="font-weight:700;color:#071a33;margin:18px 0 6px">Feedback from our team</p>'
+        + v2_message_box(reason)
+        + '<p>You are welcome to apply again in the future.</p>'
+    )
+    send_via_resend(
+        to=app.email, subject='XERXEZ Academy Application Update',
+        html=render_v2_email(title='Application update', body_html=reject_body),
+        text=(
+            f'Hi {app.full_name},\n\nThank you for applying to teach on XERXEZ Academy.\n\n'
             f'After careful review, we are unable to approve your application at this time.\n\n'
-            f'Feedback from our team:\n{reason}\n\n'
-            f'You are welcome to apply again in the future.\n\n'
+            f'Feedback from our team:\n{reason}\n\nYou are welcome to apply again in the future.\n\n'
             f'— XERXEZ Academy Team'
         ),
-        recipient_list=[app.email],
+        from_email=LMA_FROM_EMAIL,
     )
 
     return Response({'success': True})

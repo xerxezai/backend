@@ -274,6 +274,10 @@ CONTACT_ADMIN_EMAIL = os.getenv('CONTACT_ADMIN_EMAIL', 'info@xerxez.com')
 RESEND_API_KEY = os.getenv('RESEND_API_KEY', '')
 CONTACT_FROM_EMAIL = os.getenv('CONTACT_FROM_EMAIL', 'info@xerxez.com')
 
+# Razorpay — LMA course enrollment payments
+RAZORPAY_KEY_ID = os.getenv('RAZORPAY_KEY_ID', '')
+RAZORPAY_KEY_SECRET = os.getenv('RAZORPAY_KEY_SECRET', '')
+
 # Cache configuration
 CACHES = {
     'default': {

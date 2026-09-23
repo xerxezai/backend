@@ -87,8 +87,8 @@ class BackendConfig:
                 },
                 'rate_limiting': {
                     'enabled': True,
-                    'default_rate': '100/hour',   # anonymous requests
-                    'auth_rate': '1000/hour'      # authenticated requests
+                    'default_rate': '1000/hour',  # anonymous requests
+                    'auth_rate': '5000/hour'      # authenticated requests
                 }
             },
             

@@ -160,6 +160,12 @@ class Enrollment(models.Model):
     completed = models.BooleanField(default=False)
     completed_at = models.DateTimeField(null=True, blank=True)
 
+    # Razorpay payment trail — blank for free-course enrollments (no order
+    # was ever created) and for enrollments made before this field existed.
+    razorpay_order_id = models.CharField(max_length=100, blank=True, default='')
+    razorpay_payment_id = models.CharField(max_length=100, blank=True, default='')
+    amount_paid = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+
     class Meta:
         unique_together = ['student', 'course']
 

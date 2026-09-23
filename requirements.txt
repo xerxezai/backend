@@ -17,6 +17,7 @@ python-dotenv==1.2.2
 pytz==2026.2
 PyYAML==6.0.3
 qrcode==8.2
+razorpay==2.0.1
 redis==8.0.0
 reportlab==4.0.7
 resend==2.32.2
