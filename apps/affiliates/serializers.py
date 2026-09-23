@@ -57,6 +57,16 @@ class AffiliateAdminListSerializer(serializers.ModelSerializer):
         ]
 
 
+class AffiliateAdminDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Affiliate
+        fields = [
+            'id', 'full_name', 'email', 'affiliate_code', 'company_name', 'website',
+            'promotion_method', 'audience_size', 'status', 'rejection_reason', 'commission_rate',
+            'total_clicks', 'total_conversions', 'total_earnings', 'created_at', 'approved_at',
+        ]
+
+
 class AffiliateCommissionSerializer(serializers.ModelSerializer):
     course_title = serializers.CharField(source='course.title', read_only=True)
 
@@ -72,10 +82,17 @@ class AffiliateCommissionAdminSerializer(serializers.ModelSerializer):
     course_title = serializers.CharField(source='course.title', read_only=True)
     affiliate_name = serializers.CharField(source='affiliate.full_name', read_only=True)
     affiliate_code = serializers.CharField(source='affiliate.affiliate_code', read_only=True)
+    student_name = serializers.SerializerMethodField()
+    student_email = serializers.CharField(source='enrollment.student.email', read_only=True)
 
     class Meta:
         model = AffiliateCommission
         fields = [
             'id', 'affiliate', 'affiliate_name', 'affiliate_code', 'course', 'course_title',
+            'student_name', 'student_email',
             'course_price', 'commission_rate', 'commission_amount', 'status', 'paid_at', 'created_at',
         ]
+
+    def get_student_name(self, obj):
+        student = obj.enrollment.student
+        return student.get_full_name() or student.username
