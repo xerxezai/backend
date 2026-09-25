@@ -62,6 +62,8 @@ QUALIFICATION_FIELDS = [
     ('Course Name(s)', 'course_names'),
     ('Platform URL', 'platform_url'),
     ('Course URL(s)', 'course_url'),
+    ('Course Format', 'course_format'),
+    ('Additional Details', 'additional_details'),
     ('Coupon Code', 'coupon_code'),
     ('Discount Amount', 'discount_amount'),
     ('Heard Via', 'hear_about_us'),
@@ -160,6 +162,14 @@ class ContactMessageCreateView(APIView):
             )
 
         is_partner_course_listing = instance.service == 'Partner Course Listing'
+        # Subject overrides for services that need to be easy to spot/filter
+        # in the inbox — same notification email body (lists every form
+        # field) for every service, just a distinct subject line.
+        SERVICE_SUBJECTS = {
+            'Become an Affiliate': f"New Affiliate Enquiry from {instance.full_name}",
+            'Student Enrollment': f"Student Enrollment Enquiry from {instance.full_name}",
+            'Instructor Partnership': f"Instructor Partnership Enquiry from {instance.full_name}",
+        }
 
         # 1. Notify XERXEZ team — same notification email (already lists every
         # form field: name, email, phone, company, service, qualification
@@ -168,6 +178,8 @@ class ContactMessageCreateView(APIView):
         # to spot/filter.
         if is_partner_course_listing:
             subject = f"New Partner Course Listing Request — {instance.company or instance.full_name}"
+        elif instance.service in SERVICE_SUBJECTS:
+            subject = SERVICE_SUBJECTS[instance.service]
         else:
             subject = f"New Contact Form Submission — {instance.subject or instance.service or 'General Enquiry'} from {instance.full_name}"
 

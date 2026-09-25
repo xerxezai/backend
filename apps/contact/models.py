@@ -73,6 +73,8 @@ class ContactMessage(models.Model):
     course_url          = models.URLField(max_length=500, blank=True)
     coupon_code         = models.CharField(max_length=100, blank=True)
     discount_amount     = models.CharField(max_length=50, blank=True)
+    course_format       = models.CharField(max_length=50, blank=True)
+    additional_details  = models.TextField(blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     is_read    = models.BooleanField(default=False)

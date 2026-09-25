@@ -643,9 +643,17 @@ def instructor_dashboard(request):
         'pending_reviews': courses.filter(status='pending_review').count(),
         'assignments_to_grade': pending_submissions_qs.count(),
     }
-    if is_super_user:
-        total_revenue = sum(float(c.price) * c.total_students for c in courses)
-        stats['total_earnings'] = round(total_revenue, 2)
+    # Earnings — gated on is_staff, not the instructor_level tier: a plain
+    # (non-super) instructor still gets their own courses' revenue, an
+    # is_staff account gets every instructor's revenue combined regardless
+    # of their own instructor_level. `courses` above is already the right
+    # scope for a non-staff instructor (their own courses); staff explicitly
+    # re-queries every course so this stays platform-wide even for a staff
+    # account whose instructor_level isn't 'super'.
+    earnings_courses = Course.objects.all() if user.is_staff else courses
+    total_revenue = sum(float(c.price) * c.total_students for c in earnings_courses)
+    stats['total_earnings'] = round(total_revenue, 2)
+    stats['earnings_scope'] = 'platform' if user.is_staff else 'own'
 
     # Recent activity feed — enrollments, reviews, and assignment submissions
     # across this instructor's own courses, each capped at 8 and merged/sorted
@@ -2092,6 +2100,8 @@ def unenroll_student(request, enrollment_id):
 def instructor_reviews(request):
     """GET /api/v1/lma/instructor/reviews/"""
     profile = _get_or_create_lma_profile(request.user)
+    if not profile.can_access_instructor:
+        return Response({'error': 'Instructor access required.'}, status=403)
     course_qs = (
         Course.objects.all() if _is_super(profile)
         else Course.objects.filter(instructor=request.user)
@@ -2202,6 +2212,8 @@ def instructor_analytics(request):
     from django.db.models import Avg
 
     profile = _get_or_create_lma_profile(request.user)
+    if not profile.can_access_instructor:
+        return Response({'error': 'Instructor access required.'}, status=403)
     is_super_user = _is_super(profile)
     courses = (
         Course.objects.all() if is_super_user
@@ -2944,6 +2956,8 @@ def list_applications(request):
         'course_description': a.course_description,
         'target_audience': a.target_audience,
         'estimated_duration': a.estimated_duration,
+        'agree_terms': a.agree_terms,
+        'confirm_rights': a.confirm_rights,
         'status': a.status,
         'rejection_reason': a.rejection_reason,
         'applied_at': a.applied_at.isoformat(),
