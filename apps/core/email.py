@@ -1,56 +1,38 @@
-"""Shared Resend email sending helper.
+"""Shared transactional-email sending helper.
 
-Used by any app that needs to send transactional email via Resend
-(contact form, LMA notifications, etc.) instead of Django's SMTP backend.
+Used by every app that needs to send transactional email (contact form, LMA
+notifications, affiliate/instructor applications, ERP welcome emails, etc).
+
+Sends directly through Django's configured SMTP backend (Gmail, per
+EMAIL_HOST/EMAIL_HOST_USER/EMAIL_HOST_PASSWORD in settings) — no third-party
+email API in the path. Resend was removed entirely: in production it was
+silently dropping mail because that Resend account has no verified sending
+domain, so its sandbox mode rejected delivery to anyone but the account
+owner's own address, and that failure was easy to miss since it only
+surfaced as a log line, never a visible error. Every caller across the
+codebase still imports this as `send_via_resend` — kept the name to avoid
+touching a dozen call sites for what is purely a rename; it is no longer a
+Resend wrapper, just this module's send function.
 """
 import logging
 
-import resend
 from django.conf import settings
+from django.core.mail import EmailMultiAlternatives
 
 logger = logging.getLogger(__name__)
 
 
 def send_via_resend(*, to, subject, html, text, from_email, reply_to=None):
-    """Send one email through Resend, falling back to Django's configured
-    SMTP backend if RESEND_API_KEY isn't set — better than silently dropping
-    every email an app sends through this helper (contact form, affiliate
-    applications, partner approvals, …) just because Resend's domain isn't
-    verified yet. Never raises — a failed email must not break the caller's
+    """Send one email via Django's SMTP backend. `from_email` is accepted
+    for call-site compatibility but ignored — Gmail SMTP requires the From
+    address to match the authenticated account (settings.DEFAULT_FROM_EMAIL /
+    EMAIL_HOST_USER), so sending from anything else would just fail
+    silently. Never raises — a failed email must not break the caller's
     request either way."""
-    resend.api_key = settings.RESEND_API_KEY
-    if not resend.api_key:
-        logger.warning("RESEND_API_KEY is not set — falling back to SMTP (subject=%r, to=%r)", subject, to)
-        _send_via_smtp_fallback(to=to, subject=subject, html=html, text=text, reply_to=reply_to)
-        return
-    params: resend.Emails.SendParams = {
-        "from": from_email,
-        "to": [to] if isinstance(to, str) else to,
-        "subject": subject,
-        "html": html,
-        "text": text,
-    }
-    if reply_to:
-        params["reply_to"] = reply_to
-    try:
-        resend.Emails.send(params)
-    except Exception as exc:
-        logger.error("Resend email failed (subject=%r, to=%r): %s", subject, to, exc)
-
-
-def _send_via_smtp_fallback(*, to, subject, html, text, reply_to=None):
-    """SMTP fallback for send_via_resend. Always sends from
-    settings.DEFAULT_FROM_EMAIL (the authenticated EMAIL_HOST_USER address),
-    not whatever `from_email` the Resend call was given — Resend callers
-    pass Resend's shared onboarding@resend.dev sender (since xerxez.com
-    isn't verified there yet), but Gmail SMTP requires the From address to
-    match the authenticated account, so reusing that value here would just
-    trade one silent failure for another."""
     if not settings.EMAIL_HOST_USER:
-        logger.warning("EMAIL_HOST_USER is not set either — email skipped entirely (subject=%r, to=%r)", subject, to)
+        logger.warning("EMAIL_HOST_USER is not set — email skipped entirely (subject=%r, to=%r)", subject, to)
         return
     try:
-        from django.core.mail import EmailMultiAlternatives
         recipients = [to] if isinstance(to, str) else to
         msg = EmailMultiAlternatives(
             subject, text, settings.DEFAULT_FROM_EMAIL, recipients,
@@ -60,7 +42,7 @@ def _send_via_smtp_fallback(*, to, subject, html, text, reply_to=None):
             msg.attach_alternative(html, "text/html")
         msg.send(fail_silently=False)
     except Exception as exc:
-        logger.error("SMTP fallback email failed (subject=%r, to=%r): %s", subject, to, exc)
+        logger.error("SMTP email failed (subject=%r, to=%r): %s", subject, to, exc)
 
 
 # ── Shared v2-themed HTML email shell ────────────────────────────────────────

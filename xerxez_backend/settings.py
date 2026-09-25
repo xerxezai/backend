@@ -270,8 +270,6 @@ EMAIL_TIMEOUT = 8  # seconds — prevents send_mail from blocking indefinitely
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or 'info@xerxez.com'
 CONTACT_ADMIN_EMAIL = os.getenv('CONTACT_ADMIN_EMAIL', 'info@xerxez.com')
 
-# Resend — used for contact form notification + auto-reply emails
-RESEND_API_KEY = os.getenv('RESEND_API_KEY', '')
 CONTACT_FROM_EMAIL = os.getenv('CONTACT_FROM_EMAIL', 'info@xerxez.com')
 
 # Razorpay — LMA course enrollment payments

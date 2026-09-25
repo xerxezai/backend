@@ -204,10 +204,9 @@ def apply(request):
         affiliate.user = user
         affiliate.save(update_fields=['user'])
 
-    # Both emails go through send_via_resend, which already wraps the send in
-    # try/except and skips (with a logged warning, not an exception) when
-    # RESEND_API_KEY isn't configured — see apps/core/email.py. Failures here
-    # never block the response: the Affiliate row is already saved above.
+    # Both emails go through send_via_resend (SMTP-based — see apps/core/email.py),
+    # which already wraps the send in try/except and just logs on failure.
+    # Failures here never block the response: the Affiliate row is already saved above.
     plain, html = _application_notification_email(affiliate)
     send_via_resend(to=ADMIN_EMAIL, subject=f'New affiliate application from {affiliate.full_name}', html=html, text=plain, from_email=FROM_EMAIL)
     plain2, html2 = _applicant_confirmation_email(affiliate)
