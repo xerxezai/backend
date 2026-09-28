@@ -93,6 +93,34 @@ class CompanyDetailView(APIView):
         return Response({'message': 'Company deactivated'})
 
 
+class CompanyPermanentDeleteView(APIView):
+    """DELETE /api/v1/companies/{id}/permanent-delete/ — irreversible, unlike
+    CompanyDetailView.delete() above which only deactivates. Platform admin only. Every model
+    scoped to a company (Employees, CRM/Sales/Accounting records, etc.) has company as
+    on_delete=CASCADE, so this genuinely removes the tenant's entire dataset — the confirmation
+    on the frontend says exactly that."""
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, company_id):
+        _, is_platform_admin = resolve_company(request)
+        if not is_platform_admin:
+            return Response({'error': 'Not authorized'}, status=403)
+        try:
+            company = Company.objects.get(id=company_id)
+        except Company.DoesNotExist:
+            return Response({'error': 'Company not found'}, status=404)
+        from django.db.models import ProtectedError
+        try:
+            company.delete()
+        except ProtectedError:
+            return Response(
+                {'error': 'This company has records that cannot be removed automatically. Deactivate it instead.'},
+                status=409,
+            )
+        return Response({'message': 'Company permanently deleted'})
+
+
 # Modules a Company Admin is auto-granted across, mirroring how rbac's
 # UserManagementView.post() auto-grants a super_admin every module.
 ALL_MODULE_NAMES = [c[0] for c in Module.MODULE_CHOICES]
@@ -360,7 +388,11 @@ class MyCompanyView(APIView):
     def get(self, request):
         company, is_platform_admin = resolve_company(request)
         if is_platform_admin:
-            companies = Company.objects.filter(status='active')
+            # New companies default to status='trial' (Company.status default) and
+            # AddCompanyModal never sets status — filtering to 'active' only meant every
+            # freshly-created company was invisible in the switcher/dropdown until someone
+            # manually flipped its status. Trial companies are fully usable, so show them too.
+            companies = Company.objects.filter(status__in=['active', 'trial'])
             return Response({
                 'is_platform_admin': True,
                 'active_company': CompanySerializer(company).data if company else None,

@@ -334,6 +334,43 @@ def lma_login(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def lma_switch_from_erp(request):
+    """POST /api/v1/lma/auth/switch/ — lets an already-logged-in ERP superuser (Danish,
+    Tanzeem, ...) jump straight into the LMA Instructor Dashboard from the ERP sidebar's
+    "Switch to Academy" button, without re-entering credentials. Authenticates off the ERP
+    session's own JWT (same JWTAuthentication + User table as everywhere else — no separate
+    "ERP token" needs to be passed in the body), then mints a fresh LMA token the same way
+    lma_login does. Superuser-only by design: anyone else gets a 403 and the frontend falls
+    back to the normal /lma/login credential flow."""
+    if not request.user.is_superuser:
+        return Response({'error': 'Only superusers can switch directly from the ERP.'}, status=403)
+
+    profile = _get_or_create_lma_profile(request.user)
+    log_audit_event(request, 'login_success', username=request.user.username, source='lma')
+    token = _lma_token(request.user)
+    name = request.user.get_full_name() or request.user.username
+
+    return Response({
+        'lma_token': token['access'],
+        'lma_refresh': token['refresh'],
+        'lma_role': 'instructor',
+        'can_access_student': profile.can_access_student,
+        # A superuser always gets the instructor dashboard from this shortcut, regardless of
+        # their LMAProfile.can_access_instructor flag — same reasoning as lma_login's
+        # staff/superuser affiliate-access carve-out just above.
+        'can_access_instructor': True,
+        'instructor_level': profile.instructor_level,
+        'name': name,
+        'user_id': request.user.id,
+        'is_staff': request.user.is_staff,
+        'is_superuser': True,
+        'is_affiliate': True,
+        'affiliate_status': None,
+    })
+
+
+@api_view(['POST'])
 @permission_classes([AllowAny])
 @throttle_classes([LoginRateThrottle])
 def lma_register(request):

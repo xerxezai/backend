@@ -14,8 +14,10 @@ from .serializers import (
 )
 from .utils import get_user_role
 from apps.core.email import send_welcome_email
+import logging
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 class IsSuperAdmin(IsAuthenticated):
@@ -105,6 +107,13 @@ class UserManagementView(APIView):
         )
         user.is_active = True
         user.save()
+        # TEMP debug logging — remove once the "new users can't log in" report is
+        # confirmed fixed or root-caused. Logs exactly what was persisted so the next
+        # user creation can be checked in the Django logs without a DB shell query.
+        logger.warning(
+            'UserManagementView.post: created user id=%s username=%r is_active=%s has_usable_password=%s',
+            user.id, user.username, user.is_active, user.has_usable_password(),
+        )
         role = data['role']
         modules = Module.objects.filter(name__in=data.get('modules', []))
         for module in modules:

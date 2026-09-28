@@ -387,12 +387,26 @@ class EmployeeViewSet(RBACScopedMixin, viewsets.ModelViewSet):
         if not is_platform_admin and not company:
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'detail': 'Could not determine your company — contact your Super Admin before adding employees.'})
+        # email has no DB-level unique constraint (it's optional — blank=True, no default —
+        # so a hard unique=True would break the moment a second employee is saved with no
+        # email on file, since two empty strings collide under a real DB UNIQUE index). This
+        # is the safe equivalent: reject a genuine duplicate, but only when both sides have a
+        # real email, scoped to the same company so two different client companies can't
+        # collide on a shared domain.
+        email = (serializer.validated_data.get('email') or '').strip()
+        if email and Employee.objects.filter(company=company, email__iexact=email).exists():
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'email': 'An employee with this email already exists.'})
         try:
             super().perform_create(serializer)
         except IntegrityError as exc:
             self._raise_friendly_integrity_error(exc)
 
     def perform_update(self, serializer):
+        email = (serializer.validated_data.get('email') or '').strip()
+        if email and Employee.objects.filter(company=serializer.instance.company, email__iexact=email).exclude(pk=serializer.instance.pk).exists():
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'email': 'An employee with this email already exists.'})
         try:
             super().perform_update(serializer)
         except IntegrityError as exc:
