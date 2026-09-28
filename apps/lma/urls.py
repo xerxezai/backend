@@ -6,6 +6,7 @@ urlpatterns = [
     # Auth
     path('auth/login/', views.lma_login, name='lma-login'),
     path('auth/register/', views.lma_register, name='lma-register'),
+    path('auth/switch/', views.lma_switch_from_erp, name='lma-switch-from-erp'),
     # TokenRefreshView only validates the refresh token itself (SimpleJWT's
     # own signature/expiry check), same as apps/authentication/urls.py —
     # takes {"refresh": "..."} and returns a fresh {"access": "..."}.
