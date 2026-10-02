@@ -162,6 +162,10 @@ class ContactMessageCreateView(APIView):
             )
 
         is_partner_course_listing = instance.service == 'Partner Course Listing'
+        # Device enquiry forms (IoT device detail pages) send their own ready-made
+        # subject line ("Device Enquiry - <device>") rather than relying on the
+        # generated fallback below.
+        is_device_enquiry = instance.subject.startswith('Device Enquiry - ')
         # Subject overrides for services that need to be easy to spot/filter
         # in the inbox — same notification email body (lists every form
         # field) for every service, just a distinct subject line.
@@ -178,6 +182,8 @@ class ContactMessageCreateView(APIView):
         # to spot/filter.
         if is_partner_course_listing:
             subject = f"New Partner Course Listing Request — {instance.company or instance.full_name}"
+        elif is_device_enquiry:
+            subject = instance.subject
         elif instance.service in SERVICE_SUBJECTS:
             subject = SERVICE_SUBJECTS[instance.service]
         else:
@@ -210,6 +216,26 @@ class ContactMessageCreateView(APIView):
                     body_html=(
                         f'<p>Hi {first}, thank you for your interest in listing your courses on XERXEZ. '
                         f"We'll review and contact you within <strong>48 hours</strong>.</p>"
+                    ),
+                ),
+            )
+        elif is_device_enquiry:
+            first = instance.full_name.split()[0] if instance.full_name else 'there'
+            device = instance.subject.removeprefix('Device Enquiry - ')
+            _send_via_resend(
+                to=instance.email,
+                subject="Thank you for your enquiry - XERXEZ",
+                text=(
+                    f"Hi {first},\n\n"
+                    f"Thank you for your enquiry about the {device}.\n"
+                    f"Our team will review your request and get back to you shortly.\n\n"
+                    f"Best regards,\nThe XERXEZ Team\ninfo@xerxez.com | xerxez.com"
+                ),
+                html=render_v2_email(
+                    title="Thank you for your enquiry",
+                    body_html=(
+                        f'<p>Hi {first}, thank you for your enquiry about the <strong>{device}</strong>. '
+                        f"Our team will review your request and get back to you shortly.</p>"
                     ),
                 ),
             )
